@@ -1,4 +1,4 @@
-// C:\Users\OKKKK\Desktop\G-Press\G-Press\Server\index.js
+// C:\Users\OKKKK\Desktop\G-Press 1\G-Press\Server\index.js
 
 require("dotenv").config(); // Load environment variables from .env
 
@@ -8,14 +8,50 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const cron = require("node-cron");
 const admin = require("firebase-admin"); // Firebase Admin SDK
+const path = require("path"); // Added for path resolution
 
-// IMPORTANT: Initialize Firebase Admin SDK BEFORE creating the Express app
-const serviceAccount = require("./g-press-firebase-adminsdk-fbsvc-0f0cccb0fe.json");
+// --- Firebase Admin SDK Initialization ---
+// IMPORTANT: For production, load service account key from environment variable
+// For local development, load directly from file (ensured to be in .gitignore)
+let serviceAccount;
+if (
+  process.env.NODE_ENV === "production" &&
+  process.env.FIREBASE_ADMIN_SDK_JSON_BASE64
+) {
+  // In production, decode the base64 string from environment variable
+  const serviceAccountJson = Buffer.from(
+    process.env.FIREBASE_ADMIN_SDK_JSON_BASE64,
+    "base64"
+  ).toString("utf8");
+  serviceAccount = JSON.parse(serviceAccountJson);
+} else {
+  // For local development, load from the file
+  // Ensure 'serviceAccountKey.json' is the correct name you chose for the new key
+  // and that it's located in the 'config' directory, which is in .gitignore
+  try {
+    serviceAccount = require(path.resolve(
+      __dirname,
+      "config",
+      "serviceAccountKey.json"
+    ));
+  } catch (error) {
+    console.error(
+      "Failed to load Firebase service account key locally. Ensure 'serviceAccountKey.json' exists in 'Server/config/' and is properly configured for local development.",
+      error
+    );
+    // You might want to exit the process or handle this more gracefully depending on your app's needs
+    process.exit(1);
+  }
+}
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
+  // Add other Firebase configurations if you have them, e.g.,
+  // databaseURL: "https://your-project-id.firebaseio.com",
 });
+
 console.log("✅ Firebase Admin SDK initialized.");
+// --- End Firebase Admin SDK Initialization ---
 
 // =======================================================================
 // CRITICAL FIX: Explicitly require ALL Mongoose models here.
@@ -53,8 +89,6 @@ app.use(cors()); // Enable CORS for all routes
 // Connect to MongoDB
 mongoose
   .connect(process.env.MONGODB_URI || "mongodb://localhost:27017/newsDB", {
-    // useNewUrlParser: true, // Deprecated in recent Mongoose versions
-    // useUnifiedTopology: true, // Deprecated in recent Mongoose versions
     serverSelectionTimeoutMS: 5000,
     socketTimeoutMS: 45000,
   })
