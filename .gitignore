@@ -15,7 +15,10 @@ out/
 # IMPORTANT: Use the exact filename you have for your key!
 g-press-firebase-adminsdk-fbsvc-0f0cccb0fe.json
 # Configuration directories that might contain sensitive files or should not be versioned
-/config/
+# Explicitly ignore the Firebase Admin SDK key file
+config/serviceAccountKey.json
+config/serviceAccountKey.base64
+# You DO NOT want a line like '/config/' here, as that ignores everything.
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
