@@ -25,7 +25,7 @@ if (process.env.FIREBASE_ADMIN_SDK_JSON_BASE64) {
   console.log(
     "FIREBASE_ADMIN_SDK_JSON_BASE64 length:",
     process.env.FIREBASE_ADMIN_SDK_JSON_BASE64.length
-  ); // Log the first 50 characters to quickly verify the content type (Base64 vs raw JSON)
+  );
   console.log(
     "FIREBASE_ADMIN_SDK_JSON_BASE64 starts with:",
     process.env.FIREBASE_ADMIN_SDK_JSON_BASE64.substring(0, 50)
@@ -56,7 +56,7 @@ if (
     console.error(
       "This usually means the environment variable value is not a valid Base64 string or the decoded string is not valid JSON."
     );
-    process.exit(1); // Exit if critical config fails
+    process.exit(1);
   }
 } else {
   // For local development, or if production env vars are missing/incorrect
@@ -72,7 +72,7 @@ if (
       "❌ Failed to load Firebase service account key locally. Ensure 'serviceAccountKey.json' exists in 'Server/config/' and is properly configured for local development.",
       error.message
     );
-    process.exit(1); // Exit if critical config fails
+    process.exit(1);
   }
 }
 
@@ -90,14 +90,13 @@ try {
     console.log(
       "✅ Firebase Admin SDK already initialized (re-using existing app instance)."
     );
-  }
-  // --- END FIX ---
+  } // --- END FIX ---
 } catch (error) {
   console.error("❌ Failed to initialize Firebase Admin SDK:", error.message);
   console.error(
     "This can happen if the serviceAccount object is malformed or missing required fields."
   );
-  process.exit(1); // Exit if Firebase initialization fails
+  process.exit(1);
 }
 // --- End Firebase Admin SDK Initialization ---
 
@@ -132,7 +131,27 @@ const app = express();
 
 // Middleware
 app.use(bodyParser.json());
-app.use(cors()); // Enable CORS for all routes
+
+// --- UPDATED CORS CONFIGURATION ---
+const allowedOrigins = [
+  "http://localhost:3000", // For your local frontend development
+  "https://g-press.vercel.app", // Your deployed frontend URL
+  // Add any other specific frontend domains if necessary
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true, // Important if your frontend sends cookies or authorization headers
+  })
+);
+// --- END UPDATED CORS CONFIGURATION ---
 
 // Connect to MongoDB
 mongoose
