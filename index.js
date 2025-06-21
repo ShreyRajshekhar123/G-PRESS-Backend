@@ -11,46 +11,94 @@ const admin = require("firebase-admin"); // Firebase Admin SDK
 const path = require("path"); // Added for path resolution
 
 // --- Firebase Admin SDK Initialization ---
-// IMPORTANT: For production, load service account key from environment variable
-// For local development, load directly from file (ensured to be in .gitignore)
 let serviceAccount;
+
+// --- Firebase Config Debugging ---
+console.log("--- Firebase Config Debugging ---");
+console.log("NODE_ENV:", process.env.NODE_ENV);
+console.log(
+  "FIREBASE_ADMIN_SDK_JSON_BASE64 is defined:",
+  !!process.env.FIREBASE_ADMIN_SDK_JSON_BASE64
+);
+
+if (process.env.FIREBASE_ADMIN_SDK_JSON_BASE64) {
+  console.log(
+    "FIREBASE_ADMIN_SDK_JSON_BASE64 length:",
+    process.env.FIREBASE_ADMIN_SDK_JSON_BASE64.length
+  ); // Log the first 50 characters to quickly verify the content type (Base64 vs raw JSON)
+  console.log(
+    "FIREBASE_ADMIN_SDK_JSON_BASE64 starts with:",
+    process.env.FIREBASE_ADMIN_SDK_JSON_BASE64.substring(0, 50)
+  );
+}
+console.log("--- End Firebase Config Debugging ---");
+// --- End Firebase Config Debugging ---
+
 if (
   process.env.NODE_ENV === "production" &&
   process.env.FIREBASE_ADMIN_SDK_JSON_BASE64
 ) {
   // In production, decode the base64 string from environment variable
-  const serviceAccountJson = Buffer.from(
-    process.env.FIREBASE_ADMIN_SDK_JSON_BASE64,
-    "base64"
-  ).toString("utf8");
-  serviceAccount = JSON.parse(serviceAccountJson);
+  try {
+    const serviceAccountJson = Buffer.from(
+      process.env.FIREBASE_ADMIN_SDK_JSON_BASE64,
+      "base64"
+    ).toString("utf8");
+    serviceAccount = JSON.parse(serviceAccountJson);
+    console.log(
+      "Firebase Admin SDK config loaded from environment variable (Base64)."
+    );
+  } catch (error) {
+    console.error(
+      "❌ Error decoding or parsing FIREBASE_ADMIN_SDK_JSON_BASE64:",
+      error.message
+    );
+    console.error(
+      "This usually means the environment variable value is not a valid Base64 string or the decoded string is not valid JSON."
+    );
+    process.exit(1); // Exit if critical config fails
+  }
 } else {
-  // For local development, load from the file
-  // Ensure 'serviceAccountKey.json' is the correct name you chose for the new key
-  // and that it's located in the 'config' directory, which is in .gitignore
+  // For local development, or if production env vars are missing/incorrect
   try {
     serviceAccount = require(path.resolve(
       __dirname,
       "config",
       "serviceAccountKey.json"
     ));
+    console.log("Firebase Admin SDK config loaded from local file.");
   } catch (error) {
     console.error(
-      "Failed to load Firebase service account key locally. Ensure 'serviceAccountKey.json' exists in 'Server/config/' and is properly configured for local development.",
-      error
+      "❌ Failed to load Firebase service account key locally. Ensure 'serviceAccountKey.json' exists in 'Server/config/' and is properly configured for local development.",
+      error.message
     );
-    // You might want to exit the process or handle this more gracefully depending on your app's needs
-    process.exit(1);
+    process.exit(1); // Exit if critical config fails
   }
 }
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  // Add other Firebase configurations if you have them, e.g.,
-  // databaseURL: "https://your-project-id.firebaseio.com",
-});
-
-console.log("✅ Firebase Admin SDK initialized.");
+try {
+  // --- START FIX for "The default Firebase app already exists." error ---
+  // Check if a default app already exists before initializing.
+  // This is common in serverless environments where modules might be reused.
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount), // Add other Firebase configurations if you have them, e.g., // databaseURL: "https://your-project-id.firebaseio.com",
+    });
+    console.log("✅ Firebase Admin SDK initialized.");
+  } else {
+    // If it's already initialized, just log that we are re-using it.
+    console.log(
+      "✅ Firebase Admin SDK already initialized (re-using existing app instance)."
+    );
+  }
+  // --- END FIX ---
+} catch (error) {
+  console.error("❌ Failed to initialize Firebase Admin SDK:", error.message);
+  console.error(
+    "This can happen if the serviceAccount object is malformed or missing required fields."
+  );
+  process.exit(1); // Exit if Firebase initialization fails
+}
 // --- End Firebase Admin SDK Initialization ---
 
 // =======================================================================
@@ -93,8 +141,7 @@ mongoose
     socketTimeoutMS: 45000,
   })
   .then(() => {
-    console.log("✅ Connected to MongoDB");
-    // Start initial data pipeline and schedule cron jobs ONLY AFTER DB connection is successful
+    console.log("✅ Connected to MongoDB"); // Start initial data pipeline and schedule cron jobs ONLY AFTER DB connection is successful
     console.log(
       `--- Starting Initial Data Pipeline on Server Startup (${new Date().toLocaleString()}) ---`
     );
@@ -108,9 +155,8 @@ mongoose
       console.log(
         `--- Finished Initial Data Pipeline on Server Startup (${new Date().toLocaleString()}) ---`
       );
-    })();
+    })(); // Schedule automated tasks
 
-    // Schedule automated tasks
     cron.schedule("0 */2 * * *", async () => {
       // Every 2 hours
       console.log(
