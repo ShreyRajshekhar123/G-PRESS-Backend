@@ -1,14 +1,14 @@
 const express = require("express");
 const router = express.Router();
-const { spawn } = require("child_process"); // For Python scraper
+const { spawn } = require("child_process");
 const path = require("path");
 const mongoose = require("mongoose");
 
 const {
   verifyFirebaseTokenAndGetUserId,
-} = require("../middleware/authMiddleware"); // Import middleware
-const { sourceConfig } = require("../config/sources"); // Import sourceConfig
-const User = require("../models/User"); // Import User model
+} = require("../middleware/authMiddleware");
+const { sourceConfig } = require("../config/sources");
+const User = require("../models/User");
 const Question =
   mongoose.models.Question ||
   mongoose.model(
@@ -20,9 +20,8 @@ const Question =
       options: [String],
       correctAnswer: String,
     })
-  ); // Import Question model (or minimal schema if not fully defined elsewhere)
+  );
 
-// Helper to get a Mongoose model by its name string
 const getModelByName = (modelName) => {
   try {
     return mongoose.model(modelName);
@@ -32,7 +31,6 @@ const getModelByName = (modelName) => {
   }
 };
 
-// Helper to format source configKey (e.g., 'hindustan-times') to a display name (e.g., 'Hindustan Times')
 const formatSourceForDisplay = (configKey) => {
   switch (configKey) {
     case "hindu":
@@ -55,9 +53,6 @@ const formatSourceForDisplay = (configKey) => {
   }
 };
 
-// --- NEW: Category Assignment Logic ---
-// IMPORTANT: These categories MUST exactly match the enum values in your Mongoose schema.
-// If you add new categories here, you MUST update your Mongoose schema accordingly.
 const categoryKeywords = {
   "Polity & Governance": [
     "modi",
@@ -299,10 +294,9 @@ const categoryKeywords = {
     "ecommerce",
     "train services",
     "footpath",
-  ], // General terms that don't fit other specific categories
+  ],
 };
 
-// Define the exact enum values from your Mongoose schema to filter assigned categories
 const SCHEMA_ENUM_CATEGORIES = [
   "Polity & Governance",
   "Economy",
@@ -322,36 +316,29 @@ const SCHEMA_ENUM_CATEGORIES = [
 
 function assignCategoriesToArticle(title, description) {
   const text = (title + " " + (description || "")).toLowerCase();
-  const assigned = new Set(); // Use a Set to avoid duplicate categories
+  const assigned = new Set();
 
   for (const category in categoryKeywords) {
     const keywords = categoryKeywords[category];
     for (const keyword of keywords) {
       if (text.includes(keyword)) {
         assigned.add(category);
-        // Do NOT break here. An article can belong to multiple categories.
       }
     }
   }
 
-  // Filter assigned categories against the Mongoose schema's enum
   let filteredCategories = Array.from(assigned).filter((cat) =>
     SCHEMA_ENUM_CATEGORIES.includes(cat)
   );
 
-  // If after filtering, no categories are left or assigned is empty, default to "General"
   if (filteredCategories.length === 0) {
     return ["General"];
   }
 
-  return filteredCategories; // Convert Set back to Array
+  return filteredCategories;
 }
-// --- END NEW: Category Assignment Logic ---
-
-// --- SCRAPER AND NEWS FETCHING CORE FUNCTIONS (exported for index.js use) ---
 
 async function runScraperAndStore(sourceKey, scraperPath, Model) {
-  console.log(`[${sourceKey} Scraper] Starting scraper: ${scraperPath}`);
   return new Promise((resolve, reject) => {
     const pythonProcess = spawn("python", [scraperPath]);
     let dataBuffer = "";
@@ -366,11 +353,7 @@ async function runScraperAndStore(sourceKey, scraperPath, Model) {
     });
 
     pythonProcess.on("close", async (code) => {
-      console.log(`[${sourceKey} Scraper] Process exited with code: ${code}`);
       if (code !== 0) {
-        console.error(
-          `[${sourceKey} Scraper] Error in Python script for ${sourceKey}:\n${errorBuffer}`
-        );
         return reject(
           new Error(`Python script exited with code ${code}: ${errorBuffer}`)
         );
@@ -378,86 +361,61 @@ async function runScraperAndStore(sourceKey, scraperPath, Model) {
 
       try {
         const articles = JSON.parse(dataBuffer);
-        console.log(
-          `[${sourceKey} Scraper] Successfully parsed ${articles.length} articles from scraper output.`
-        );
 
         let newArticlesCount = 0;
         let updatedArticlesCount = 0;
         let skippedArticlesCount = 0;
 
-        // Define generic titles to skip for AI question generation
         const genericTitlesToSkip = [
           "representational image only. file",
           "representatve image",
           "photo used for representation purpose only.",
-          "file", // Very short titles might be problematic
+          "file",
           "photo",
           "image",
-          "a view of", // Often precedes a generic image description
-          "image released by", // Often precedes image credit
-          "representational image only", // From the screenshot
-          "file photo", // From the screenshot
-          "image might show:", // From your earlier logs
-          "stream key mixer", // From your earlier logs
-          "photo :", // Added to catch more image-only titles
-          "representational photo of", // Added to catch more image-only titles
-          "photo used for representation purpose only", // Added to catch more image-only titles
+          "a view of",
+          "image released by",
+          "representational image only",
+          "file photo",
+          "image might show:",
+          "stream key mixer",
+          "photo :",
+          "representational photo of",
+          "photo used for representation purpose only",
         ];
 
         for (const articleData of articles) {
-          const {
-            title,
-            link,
-            description,
-            imageUrl,
-            // categories, // Categories will now be assigned in Node.js
-          } = articleData;
+          const { title, link, description, imageUrl } = articleData;
 
           const dateString = articleData.publishedAt || articleData.date;
 
           if (!title || !link || !dateString) {
-            console.warn(
-              `[${sourceKey} Scraper] Skipping article due to missing title, link, or date: ${JSON.stringify(
-                articleData
-              )}`
-            );
             skippedArticlesCount++;
             continue;
           }
 
-          // --- Filter out generic/unsuitable articles for AI ---
           const lowerCaseTitle = title.toLowerCase().trim();
           const isGenericTitle = genericTitlesToSkip.some((pattern) =>
             lowerCaseTitle.includes(pattern)
           );
 
           if (isGenericTitle) {
-            console.warn(
-              `[${sourceKey} Scraper] Skipping article with generic title (not suitable for AI): "${title}"`
-            );
             skippedArticlesCount++;
-            continue; // Skip this article entirely
+            continue;
           }
-          // --- End Filtering ---
 
           let parsedDate;
           const tempDate = new Date(dateString);
           if (!isNaN(tempDate.getTime())) {
             parsedDate = tempDate;
           } else {
-            console.warn(
-              `[${sourceKey} Scraper] Invalid date format for article "${title}" (Date: "${dateString}"). Using current timestamp as fallback.`
-            );
-            parsedDate = new Date(); // Use current date as a robust fallback
+            parsedDate = new Date();
           }
 
-          // --- NEW: Assign categories here ---
           const assignedCategories = assignCategoriesToArticle(
             title,
             description
           );
-          // --- End NEW: Assign categories ---
 
           const cleanLink = link.split("?")[0];
           const existingArticle = await Model.findOne({ link: cleanLink });
@@ -465,7 +423,6 @@ async function runScraperAndStore(sourceKey, scraperPath, Model) {
           if (existingArticle) {
             let hasChanged = false;
 
-            // --- Enhanced Date Handling ---
             let verifiedExistingPubDate = null;
             if (existingArticle.pubDate) {
               try {
@@ -504,7 +461,6 @@ async function runScraperAndStore(sourceKey, scraperPath, Model) {
             const newPubDateStr = verifiedNewPubDate
               ? verifiedNewPubDate.toISOString().split("T")[0]
               : null;
-            // --- End Enhanced Date Handling ---
 
             if (existingArticle.title !== title) {
               existingArticle.title = title;
@@ -518,13 +474,10 @@ async function runScraperAndStore(sourceKey, scraperPath, Model) {
               existingArticle.imageUrl = imageUrl;
               hasChanged = true;
             }
-            // Compare string representations of dates, handling potential nulls
             if (existingPubDateStr !== newPubDateStr) {
-              existingArticle.pubDate = parsedDate; // Assign the original parsedDate (which has robust fallback)
+              existingArticle.pubDate = parsedDate;
               hasChanged = true;
             }
-            // --- NEW: Update categories for existing articles if they've changed ---
-            // Simple array comparison (may need a deeper check if order/duplicates matter)
             if (
               JSON.stringify(existingArticle.categories) !==
               JSON.stringify(assignedCategories)
@@ -532,7 +485,6 @@ async function runScraperAndStore(sourceKey, scraperPath, Model) {
               existingArticle.categories = assignedCategories;
               hasChanged = true;
             }
-            // --- End NEW ---
 
             if (hasChanged) {
               existingArticle.updatedAt = new Date();
@@ -549,18 +501,14 @@ async function runScraperAndStore(sourceKey, scraperPath, Model) {
               source: sourceKey,
               description: description || null,
               imageUrl: imageUrl || null,
-              categories: assignedCategories, // Use the assigned categories here
+              categories: assignedCategories,
               createdAt: new Date(),
               updatedAt: new Date(),
             });
             await newArticle.save();
             newArticlesCount++;
-            console.log(`[${sourceKey} Scraper] New article saved: ${title}`);
           }
         }
-        console.log(
-          `[${sourceKey} Scraper] Summary: New: ${newArticlesCount}, Updated: ${updatedArticlesCount}, Skipped: ${skippedArticlesCount}`
-        );
         resolve({
           newArticlesCount,
           updatedArticlesCount,
@@ -578,14 +526,10 @@ async function runScraperAndStore(sourceKey, scraperPath, Model) {
 }
 
 async function runAllScrapers() {
-  console.log(
-    `--- Starting Headline Scrape Cycle (${new Date().toLocaleString()}) ---`
-  );
   for (const sourceKey in sourceConfig) {
     const config = sourceConfig[sourceKey];
     try {
       await runScraperAndStore(sourceKey, config.scraperPath, config.model);
-      console.log(`[${sourceKey} Scraper] Finished processing ${sourceKey}.`);
     } catch (error) {
       console.error(
         `[${sourceKey} Scraper] Failed to run scraper for ${sourceKey}:`,
@@ -593,15 +537,9 @@ async function runAllScrapers() {
       );
     }
   }
-  console.log(
-    `--- Headline Scrape Cycle Completed (${new Date().toLocaleString()}) ---`
-  );
 }
 
 async function cleanupOldNews(daysToKeep) {
-  console.log(
-    `[Cleanup] Starting cleanup of articles older than ${daysToKeep} days...`
-  );
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
   cutoffDate.setHours(0, 0, 0, 0);
@@ -619,23 +557,16 @@ async function cleanupOldNews(daysToKeep) {
         const questionDeleteResult = await Question.deleteMany({
           articleId: { $in: articleIdsToDelete },
         });
-        console.log(
-          `[Cleanup] Deleted ${questionDeleteResult.deletedCount} questions associated with old articles from ${sourceKey}.`
-        );
       }
 
       const articleDeleteResult = await config.model.deleteMany({
         pubDate: { $lt: cutoffDate },
       });
-      console.log(
-        `[Cleanup] Deleted ${articleDeleteResult.deletedCount} articles from ${sourceKey}.`
-      );
       totalDeleted += articleDeleteResult.deletedCount;
     } catch (error) {
       console.error(`[Cleanup] Error cleaning up ${sourceKey}:`, error.message);
     }
   }
-  console.log(`[Cleanup] Total articles deleted: ${totalDeleted}`);
 }
 
 const getNewsAggregationPipeline = (page, limit) => {
@@ -675,10 +606,6 @@ const getNewsAggregationPipeline = (page, limit) => {
   ];
 };
 
-// =========================================================
-//           API ROUTES
-// =========================================================
-
 router.post("/sync-user", verifyFirebaseTokenAndGetUserId, async (req, res) => {
   try {
     const firebaseUid = req.firebaseUid;
@@ -695,7 +622,6 @@ router.post("/sync-user", verifyFirebaseTokenAndGetUserId, async (req, res) => {
         updatedAt: new Date(),
       });
       await user.save();
-      console.log(`[User Sync] New user created in DB: ${firebaseUid}`);
       return res
         .status(201)
         .json({ message: "User synced and created.", user: user.toObject() });
@@ -712,18 +638,12 @@ router.post("/sync-user", verifyFirebaseTokenAndGetUserId, async (req, res) => {
       if (updated) {
         user.updatedAt = new Date();
         await user.save();
-        console.log(`[User Sync] Existing user ${firebaseUid} data updated.`);
-      } else {
-        console.log(
-          `[User Sync] User ${firebaseUid} already exists and no updates needed.`
-        );
       }
       return res
         .status(200)
         .json({ message: "User synced.", user: user.toObject() });
     }
   } catch (error) {
-    // FIX: Access req.firebaseUid directly, with a fallback for robustness
     console.error(
       `[User Sync] Error syncing user ${req.firebaseUid || "N/A"}:`,
       error
@@ -747,9 +667,6 @@ router.get("/bookmarks", verifyFirebaseTokenAndGetUserId, async (req, res) => {
 
     for (const bookmark of bookmarks) {
       if (!bookmark.articleId || !bookmark.articleSourceModel) {
-        console.warn(
-          `[Bookmarks] Skipping malformed bookmark: Missing articleId or articleSourceModel for bookmark ID ${bookmark._id}`
-        );
         continue;
       }
 
@@ -763,11 +680,6 @@ router.get("/bookmarks", verifyFirebaseTokenAndGetUserId, async (req, res) => {
         : [];
 
       if (!enumValues.includes(sourceModelName)) {
-        console.warn(
-          `[Bookmarks] Skipping bookmark: Invalid articleSourceModel '${sourceModelName}' for bookmark ID ${
-            bookmark._id
-          }. Allowed: ${enumValues.join(", ")}`
-        );
         continue;
       }
 
@@ -776,9 +688,6 @@ router.get("/bookmarks", verifyFirebaseTokenAndGetUserId, async (req, res) => {
       );
 
       if (!sourceConfigEntry || !sourceConfigEntry.model) {
-        console.warn(
-          `[Bookmarks] Skipping bookmark: No matching config or model found for source '${sourceModelName}' (ID: ${bookmark._id}).`
-        );
         continue;
       }
 
@@ -798,20 +707,14 @@ router.get("/bookmarks", verifyFirebaseTokenAndGetUserId, async (req, res) => {
             imageUrl: article.imageUrl || null,
             description: article.description || null,
             publishedAt: article.pubDate || article.publishedAt,
-            categories: article.categories || [], // Ensure categories are passed through
+            categories: article.categories || [],
             source: formatSourceForDisplay(article.source),
           },
         });
       } else {
-        console.log(
-          `[Bookmarks] Article ID ${bookmark.articleId} from ${sourceModelName} not found. Skipping bookmark.`
-        );
       }
     }
 
-    console.log(
-      `[Bookmarks] Fetched ${populatedBookmarks.length} populated bookmarks for user ${firebaseUid}.`
-    );
     res.status(200).json(populatedBookmarks);
   } catch (error) {
     console.error("Error fetching user bookmarks:", error);
@@ -843,11 +746,6 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
       !articleSourceModelSchemaType.enumValues ||
       !articleSourceModelSchemaType.enumValues.includes(articleSourceModel)
     ) {
-      console.warn(
-        `[Bookmark Add] Invalid source model name: ${articleSourceModel} for article ${articleId}. Allowed: ${articleSourceModelSchemaType.enumValues.join(
-          ", "
-        )}`
-      );
       return res.status(400).json({
         message: `Invalid source model name provided for bookmark: '${articleSourceModel}'. Allowed values are: ${
           articleSourceModelSchemaType
@@ -873,9 +771,6 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
     );
 
     if (isAlreadyBookmarkedInMemory) {
-      console.log(
-        `[Bookmark Add] Article ${articleId} from ${articleSourceModel} already bookmarked by user ${firebaseUid}.`
-      );
       return res.status(409).json({ message: "Article already bookmarked." });
     }
 
@@ -911,7 +806,7 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
         imageUrl: article.imageUrl || null,
         description: article.description || null,
         publishedAt: article.pubDate,
-        categories: article.categories, // Use the assigned categories here
+        categories: article.categories,
         source: formatSourceForDisplay(article.source),
       },
     };
@@ -919,9 +814,6 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
     user.bookmarks.push(newBookmark);
     await user.save();
 
-    console.log(
-      `[Bookmark Add] Successfully bookmarked article ${articleId} from ${articleSourceModel} for user ${firebaseUid}.`
-    );
     res.status(201).json({
       message: "Article bookmarked successfully!",
       bookmark: newBookmark,
@@ -944,10 +836,6 @@ router.delete(
     try {
       const firebaseUid = req.firebaseUid;
       const { bookmarkId } = req.params;
-
-      console.log(
-        `[Bookmark Remove] Received DELETE request for bookmarkId: ${bookmarkId}`
-      );
 
       if (!bookmarkId || !mongoose.Types.ObjectId.isValid(bookmarkId)) {
         return res.status(400).json({
@@ -974,12 +862,8 @@ router.delete(
       }
 
       await user.save();
-      console.log(
-        `[Bookmark Remove] Successfully removed bookmark with ID ${bookmarkId} for user ${firebaseUid}.`
-      );
       res.status(200).json({ message: "Bookmark removed successfully!" });
     } catch (error) {
-      // FIX: Access req.firebaseUid directly here as well, with a fallback for robustness
       console.error(
         `Error removing bookmark for user ${req.firebaseUid || "N/A"}:`,
         error
@@ -989,8 +873,6 @@ router.delete(
   }
 );
 
-// NEW ROUTE: 5a. GET /api/news/current-affairs - Now functions like /api/news/all
-// This should come BEFORE the dynamic /:sourceKey route to be prioritized
 router.get("/current-affairs", async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 50;
@@ -998,25 +880,20 @@ router.get("/current-affairs", async (req, res) => {
   try {
     let allArticles = [];
 
-    // Fetch articles from all configured sources
     for (const sourceKey in sourceConfig) {
       const config = sourceConfig[sourceKey];
-      // Only process if the model exists and is valid
       if (config.model) {
-        // Use the aggregation pipeline for consistency and question population
         const sourceArticles = await config.model.aggregate(
-          getNewsAggregationPipeline(1, limit * 2) // Fetch more than `limit` for global sorting
+          getNewsAggregationPipeline(1, limit * 2),
+          { maxTimeMS: 30000 } // Apply maxTimeMS as an option
         );
         allArticles.push(...sourceArticles);
       }
     }
 
-    // Sort all combined results globally based on the pipeline's sort order
     allArticles.sort((a, b) => {
-      // Primary sort: articles with questions come first
       if (a.hasQuestions && !b.hasQuestions) return -1;
       if (!a.hasQuestions && b.hasQuestions) return 1;
-      // Secondary sort: by publication date (most recent first)
       return new Date(b.pubDate) - new Date(a.pubDate);
     });
 
@@ -1046,7 +923,8 @@ router.get("/all", async (req, res) => {
       const config = sourceConfig[sourceKey];
       if (config.model) {
         const sourceArticles = await config.model.aggregate(
-          getNewsAggregationPipeline(1, limit * 2)
+          getNewsAggregationPipeline(1, limit * 2),
+          { maxTimeMS: 30000 } // Apply maxTimeMS as an option
         );
         allArticles.push(...sourceArticles);
       }
@@ -1073,6 +951,45 @@ router.get("/all", async (req, res) => {
   }
 });
 
+router.get("/:sourceKey", async (req, res) => {
+  const sourceKey = req.params.sourceKey;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 50;
+
+  const config = sourceConfig[sourceKey];
+  if (!config || !config.model) {
+    return res.status(404).json({ message: "News source not found." });
+  }
+
+  try {
+    const news = await config.model.aggregate(
+      getNewsAggregationPipeline(page, limit),
+      { maxTimeMS: 30000 } // Apply maxTimeMS as an option
+    );
+
+    if (!news || news.length === 0) {
+      return res.status(200).json({
+        message: `Failed to fetch news from ${sourceKey}. No articles found or an issue occurred.`,
+      });
+    }
+
+    res.status(200).json({ news });
+  } catch (error) {
+    console.error(`Error fetching news from ${sourceKey}:`, error);
+    if (
+      error.name === "MongooseError" &&
+      error.message.includes("buffering timed out")
+    ) {
+      return res.status(500).json({
+        message: `Database query timed out for ${sourceKey}. This usually means the query is too slow or database is unreachable.`,
+      });
+    }
+    res
+      .status(500)
+      .json({ message: `Failed to fetch news from ${sourceKey}.` });
+  }
+});
+
 router.get("/search", async (req, res) => {
   const query = req.query.q;
   const page = parseInt(req.query.page) || 1;
@@ -1089,80 +1006,28 @@ router.get("/search", async (req, res) => {
     for (const sourceKey in sourceConfig) {
       const Model = sourceConfig[sourceKey].model;
       if (Model) {
-        const searchPipeline = [
-          {
-            $match: {
-              $or: [
-                { title: { $regex: regex } },
-                { description: { $regex: regex } },
-                { content: { $regex: regex } },
-                { categories: { $regex: regex } },
-              ],
-            },
-          },
-          ...getNewsAggregationPipeline(1, limit * 2),
-        ];
-        const articles = await Model.aggregate(searchPipeline);
-        searchResults.push(...articles);
+        const sourceSearchResults = await Model.find({
+          $or: [{ title: regex }, { description: regex }],
+        }).lean();
+        searchResults.push(...sourceSearchResults);
       }
     }
 
-    searchResults.sort((a, b) => {
-      if (a.hasQuestions && !b.hasQuestions) return -1;
-      if (!a.hasQuestions && b.hasQuestions) return 1;
-      return new Date(b.pubDate) - new Date(a.pubDate);
-    });
+    searchResults.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
 
-    const skipGlobal = (page - 1) * limit;
-    const finalSearchResults = searchResults.slice(
-      skipGlobal,
-      skipGlobal + limit
-    );
+    const startIndex = (page - 1) * limit;
+    const endIndex = page * limit;
+    const paginatedResults = searchResults.slice(startIndex, endIndex);
 
     res.status(200).json({
-      news: finalSearchResults,
+      news: paginatedResults,
       currentPage: page,
       totalPages: Math.ceil(searchResults.length / limit),
       totalResults: searchResults.length,
     });
   } catch (error) {
-    console.error("Error during search:", error);
-    res.status(500).json({ message: "Error during search" });
-  }
-});
-
-router.get("/:sourceKey", async (req, res) => {
-  const sourceKey = req.params.sourceKey.toLowerCase();
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 50;
-
-  const config = sourceConfig[sourceKey];
-
-  if (!config || !config.model) {
-    return res
-      .status(404)
-      .json({ message: "News source not found or configured." });
-  }
-
-  try {
-    const Model = config.model;
-    const articles = await Model.aggregate(
-      getNewsAggregationPipeline(page, limit)
-    );
-
-    const totalCount = await Model.countDocuments();
-
-    res.status(200).json({
-      news: articles,
-      currentPage: page,
-      totalPages: Math.ceil(totalCount / limit),
-      totalResults: totalCount,
-    });
-  } catch (error) {
-    console.error(`Error fetching news from ${req.params.sourceKey}:`, error);
-    res
-      .status(500)
-      .json({ message: `Failed to fetch news from ${req.params.sourceKey}.` });
+    console.error("Error during news search:", error);
+    res.status(500).json({ message: "Failed to perform search." });
   }
 });
 
