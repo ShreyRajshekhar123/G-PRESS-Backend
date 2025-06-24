@@ -460,50 +460,7 @@ router.get("/all", async (req, res) => {
   }
 });
 
-// Get News by Source
-router.get("/:sourceKey", async (req, res) => {
-  const sourceKey = req.params.sourceKey;
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 50;
-
-  const config = sourceConfig[sourceKey];
-  if (!config || !config.model) {
-    return res.status(404).json({ message: "News source not found." });
-  }
-
-  try {
-    const news = await config.model.aggregate(
-      getNewsAggregationPipeline(page, limit),
-      { maxTimeMS: 30000 } // Apply maxTimeMS as an option
-    );
-
-    if (!news || news.length === 0) {
-      // It's better to return an empty array with success if no news found,
-      // rather than a 404 or an error, unless it's truly an unexpected issue.
-      return res.status(200).json({
-        news: [],
-        message: `No articles found for ${formatSourceForDisplay(sourceKey)}.`,
-      });
-    }
-
-    res.status(200).json({ news });
-  } catch (error) {
-    console.error(`Error fetching news from ${sourceKey}:`, error);
-    if (
-      error.name === "MongooseError" &&
-      error.message.includes("buffering timed out")
-    ) {
-      return res.status(500).json({
-        message: `Database query timed out for ${sourceKey}. This usually means the query is too slow or database is unreachable.`,
-      });
-    }
-    res
-      .status(500)
-      .json({ message: `Failed to fetch news from ${sourceKey}.` });
-  }
-});
-
-// Search News
+// Search News (THIS NEEDS TO BE BEFORE /:sourceKey)
 router.get("/search", async (req, res) => {
   const query = req.query.q;
   const page = parseInt(req.query.page) || 1;
@@ -551,6 +508,49 @@ router.get("/search", async (req, res) => {
   } catch (error) {
     console.error("Error during news search:", error);
     res.status(500).json({ message: "Failed to perform search." });
+  }
+});
+
+// Get News by Source (THIS MUST BE AFTER /search, /current-affairs, /all)
+router.get("/:sourceKey", async (req, res) => {
+  const sourceKey = req.params.sourceKey;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 50;
+
+  const config = sourceConfig[sourceKey];
+  if (!config || !config.model) {
+    return res.status(404).json({ message: "News source not found." });
+  }
+
+  try {
+    const news = await config.model.aggregate(
+      getNewsAggregationPipeline(page, limit),
+      { maxTimeMS: 30000 } // Apply maxTimeMS as an option
+    );
+
+    if (!news || news.length === 0) {
+      // It's better to return an empty array with success if no news found,
+      // rather than a 404 or an error, unless it's truly an unexpected issue.
+      return res.status(200).json({
+        news: [],
+        message: `No articles found for ${formatSourceForDisplay(sourceKey)}.`,
+      });
+    }
+
+    res.status(200).json({ news });
+  } catch (error) {
+    console.error(`Error fetching news from ${sourceKey}:`, error);
+    if (
+      error.name === "MongooseError" &&
+      error.message.includes("buffering timed out")
+    ) {
+      return res.status(500).json({
+        message: `Database query timed out for ${sourceKey}. This usually means the query is too slow or database is unreachable.`,
+      });
+    }
+    res
+      .status(500)
+      .json({ message: `Failed to fetch news from ${sourceKey}.` });
   }
 });
 
