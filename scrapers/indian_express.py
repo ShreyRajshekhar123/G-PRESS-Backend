@@ -1,100 +1,133 @@
 # C:\Users\OKKKK\Desktop\G-Press 1\G-Press\Server\scrapers\indian_express.py
 
 import json
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from selenium.common.exceptions import StaleElementReferenceException
-from datetime import datetime
 import sys
-import time
+from datetime import datetime
 import logging
+import requests
+from bs4 import BeautifulSoup
 
+sys.stdout.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def get_indian_express_articles():
     sys.stdout.reconfigure(encoding='utf-8') # Ensure stdout is UTF-8
 
-    # Configure headless Chrome
-    options = Options()
-    options.add_argument('--headless')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument("--log-level=3")
-    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36')
-    options.page_load_strategy = 'eager'
+    base_url = "https://indianexpress.com"
+    url = f"{base_url}/" # The base URL for Indian Express
 
-    service = Service(ChromeDriverManager().install())
-    driver = None
-    data = []
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+    }
+
+    all_articles = []
+    processed_links = set() # To store links and avoid duplicates
 
     try:
-        driver = webdriver.Chrome(service=service, options=options)
-        driver.get("https://indianexpress.com/")
-        logging.info("Waiting for initial page content to load for Indian Express...")
-        time.sleep(5) # Let the page load
+        logging.info(f"Fetching page content from {url} for Indian Express...")
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
 
-        logging.info("Scraping Indian Express articles...")
-        
-        # Selectors for main headlines and list items
-        article_links = driver.find_elements(By.CSS_SELECTOR, 
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Use the combined CSS selectors from the original Selenium script
+        article_link_elements = soup.select(
             "div.section-article h2 a, " # For main headlines
-            "div.articles div.articles li a, " # For list items
+            "div.articles div.articles li a, " # For list items (e.g., in latest news sections)
             "div.other-article a" # For other article blocks
         )
+        
+        logging.info(f"Found {len(article_link_elements)} potential article links.")
 
-        processed_links = set() # To store links and avoid duplicates
-
-        for i, link_elem in enumerate(article_links):
-            if len(data) >= 25:
+        for i, link_elem in enumerate(article_link_elements):
+            if len(all_articles) >= 25: # Limit to top 25 articles
                 logging.info(f"Reached 25 articles for Indian Express. Stopping.")
                 break
 
             title = None
             href = None
+            description = None
+            imageUrl = None
             
-            # Use current scraping timestamp for consistency across all scrapers
-            current_scrape_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Always use current scraping timestamp for consistency
+            published_at = datetime.now().isoformat()
 
             try:
-                title = link_elem.text.strip()
-                href = link_elem.get_attribute("href")
+                title = link_elem.get_text(strip=True)
+                href = link_elem.get('href')
 
-                # Avoid empty titles or non-http links or duplicates
+                # Skip if title or link is empty, or if link is not http/https, or if already processed
                 if not title or not href or not href.startswith('http') or href in processed_links:
                     logging.debug(f"IE Item {i+1}: Skipping invalid or duplicate article. Title: '{title}', Link: '{href}'")
                     continue
                 
-                data.append({
+                # Try to find a description. This might vary greatly by article block.
+                # A common pattern could be a sibling <p> tag or a <p> within a parent.
+                # For now, let's keep it simple and set description to title for consistency with original.
+                description = title 
+
+                # Try to find an image associated with the article.
+                # This is highly dependent on the specific HTML structure around each link.
+                # A common pattern might be an image within a parent or sibling div.
+                # Example: <div class="s-img"><img src="..."></div>
+                # Let's try finding an img tag within the parent div of the link or an immediate sibling.
+                parent_div = link_elem.find_parent('div')
+                if parent_div:
+                    # Look for image within the parent or a sibling image container
+                    img_elem = parent_div.select_one("img[src]") # Find img with src attribute
+                    if img_elem and img_elem.get('src'):
+                        imageUrl = img_elem.get('src')
+                    else:
+                        # Try finding image in a sibling 'div.s-img' or similar
+                        sibling_img_div = parent_div.find_previous_sibling("div", class_="s-img")
+                        if sibling_img_div:
+                            img_elem = sibling_img_div.select_one("img[src]")
+                            if img_elem and img_elem.get('src'):
+                                imageUrl = img_elem.get('src')
+                
+                # Add to processed links to avoid duplicates
+                processed_links.add(href)
+
+                all_articles.append({
                     "title": title,
                     "link": href,
-                    "date": current_scrape_time, # Always use current scrape time
-                    "summary": title,            # Summary is same as title
-                    "source": "indianexpress"
+                    "publishedAt": published_at,
+                    "description": description,
+                    "source": "indianexpress",
+                    "imageUrl": imageUrl, # Will be None if not found in static HTML
+                    "content": None, # Full content would require visiting each article link
+                    "categories": [], # Not easily available on listing page
                 })
-                processed_links.add(href) # Add to set of processed links
-                logging.info(f"IE Item {i+1}: Added article: '{title[:50]}...' Date: {current_scrape_time}")
+                logging.info(f"IE Item {i+1}: Added article: '{title[:50]}...'")
 
-            except StaleElementReferenceException:
-                logging.warning(f"IE Item {i+1}: Stale element encountered for link. Skipping this item.")
-                continue # Skip to the next item if stale
             except Exception as e:
-                logging.error(f"IE Item {i+1}: Error processing article: {e}")
-                continue
+                logging.error(f"IE Item {i+1}: Error processing article: {e}. Skipping to next.")
+                continue # Continue to next article even if one fails
 
+    except requests.exceptions.HTTPError as e:
+        logging.error(f"Indian Express Scraper: HTTP error occurred: {e} - Status Code: {e.response.status_code}")
+        all_articles = [] # Ensure empty list on critical error
+    except requests.exceptions.ConnectionError as e:
+        logging.error(f"Indian Express Scraper: Connection error occurred: {e}. Check internet connection or URL.")
+        all_articles = []
+    except requests.exceptions.Timeout as e:
+        logging.error(f"Indian Express Scraper: Timeout error occurred: {e}. Server took too long to respond.")
+        all_articles = []
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Indian Express Scraper: An unexpected requests error occurred: {e}")
+        all_articles = []
     except Exception as e:
-        logging.error(f"Indian Express Scraper failed entirely: {e}")
-        data = []
+        logging.error(f"Indian Express Scraper: An unexpected error occurred: {e}")
+        all_articles = []
     finally:
-        if driver:
-            driver.quit()
-            logging.info("Indian Express WebDriver closed.")
-            
-    return data # Return the data instead of printing it directly from the function
+        # Print the entire list of articles as JSON to stdout.
+        json.dump(all_articles, sys.stdout, ensure_ascii=False, indent=2)
+        logging.info("Indian Express scraping process finished.")
 
 if __name__ == "__main__":
-    articles_data = get_indian_express_articles()
-    print(json.dumps(articles_data, ensure_ascii=False, indent=2))
+    get_indian_express_articles()

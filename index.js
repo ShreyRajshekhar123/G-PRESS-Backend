@@ -1,3 +1,4 @@
+// index.js
 require("dotenv").config();
 
 const express = require("express");
@@ -8,8 +9,38 @@ const cron = require("node-cron");
 const admin = require("firebase-admin");
 const path = require("path");
 
-let serviceAccount;
+// Import your custom Firebase authentication middleware
+const {
+  verifyFirebaseTokenAndGetUserId,
+} = require("./middleware/authMiddleware");
 
+// Import routes
+const newsRouter = require("./routes/news");
+const aiRouter = require("./routes/ai");
+const questionsRouter = require("./routes/questions");
+
+// Import services for scheduled tasks
+const {
+  runAllScrapers,
+  cleanupOldNews,
+} = require("./services/ingestionService");
+const {
+  processArticlesForContentAndAI,
+} = require("./services/articleProcessor");
+
+// Import models (important for Mongoose to know about them if used in other modules implicitly)
+require("./models/User");
+require("./models/Question");
+require("./models/TheHindu");
+require("./models/DNA");
+require("./models/HindustanTimes");
+require("./models/IndianExpress");
+require("./models/TimesOfIndia");
+
+const app = express();
+
+// Firebase Admin SDK Initialization
+let serviceAccount;
 if (
   process.env.NODE_ENV === "production" &&
   process.env.FIREBASE_ADMIN_SDK_JSON_BASE64
@@ -36,7 +67,7 @@ if (
     ));
   } catch (error) {
     console.error(
-      "❌ Failed to load Firebase service account key locally. Ensure 'serviceAccountKey.json' exists in 'Server/config/' and is properly configured for local development.",
+      "❌ Failed to load Firebase service account key locally. Ensure 'serviceAccountKey.json' exists in 'config/' and is properly configured for local development.",
       error.message
     );
     process.exit(1);
@@ -54,29 +85,9 @@ try {
   process.exit(1);
 }
 
-require("./models/User");
-require("./models/Question");
-require("./models/TheHindu");
-require("./models/DNA");
-require("./models/HindustanTimes");
-require("./models/IndianExpress");
-require("./models/TimesOfIndia");
-
-const {
-  router: newsRoutes,
-  runAllScrapers,
-  cleanupOldNews,
-} = require("./routes/news");
-const { router: aiRouter } = require("./routes/ai");
-const { router: questionsRouter } = require("./routes/questions");
-
-const {
-  processArticlesForContentAndAI,
-} = require("./services/articleProcessor");
-
-const app = express();
-
+// Middleware
 app.use(bodyParser.json());
+app.use(express.json()); // Ensure express.json() is also used
 
 const allowedOrigins = ["http://localhost:3000", "https://g-press.vercel.app"];
 
@@ -93,43 +104,187 @@ app.use(
   })
 );
 
+// Database Connection
 mongoose
   .connect(process.env.MONGODB_URI || "mongodb://localhost:27017/newsDB", {
     serverSelectionTimeoutMS: 30000,
     socketTimeoutMS: 45000,
+    // Removed useNewUrlParser and useUnifiedTopology as they are deprecated in recent Mongoose versions.
+    // If you are using an older Mongoose version that requires them, uncomment these lines if needed for your Mongoose version:
+    // useNewUrlParser: true,
+    // useUnifiedTopology: true,
   })
   .then(() => {
+    console.log("✅ MongoDB connected successfully.");
+
+    // Initial data pipeline run on startup
     (async () => {
       try {
+        console.log("🚀 Starting initial data pipeline run...");
+        const initialPipelineStartTime = process.hrtime.bigint();
+
+        const scraperStartTime = process.hrtime.bigint();
+        console.log("Running initial scrapers...");
         await runAllScrapers();
+        const scraperEndTime = process.hrtime.bigint();
+        const scraperDurationMs =
+          Number(scraperEndTime - scraperStartTime) / 1_000_000;
+        console.log(
+          `Initial scraping and ingestion completed in ${scraperDurationMs.toFixed(
+            2
+          )} ms.`
+        );
+
+        const articleProcessorStartTime = process.hrtime.bigint();
+        console.log("Processing articles for content and AI...");
         await processArticlesForContentAndAI();
+        const articleProcessorEndTime = process.hrtime.bigint();
+        const articleProcessorDurationMs =
+          Number(articleProcessorEndTime - articleProcessorStartTime) /
+          1_000_000;
+        console.log(
+          `Initial article content and AI processing completed in ${articleProcessorDurationMs.toFixed(
+            2
+          )} ms.`
+        );
+
+        const cleanupInitialStartTime = process.hrtime.bigint();
+        console.log("Running initial cleanup of old news (on startup)...");
+        await cleanupOldNews(20); // Keep news for 20 days
+        const cleanupInitialEndTime = process.hrtime.bigint();
+        const cleanupInitialDurationMs =
+          Number(cleanupInitialEndTime - cleanupInitialStartTime) / 1_000_000;
+        console.log(
+          `Initial cleanup completed in ${cleanupInitialDurationMs.toFixed(
+            2
+          )} ms.`
+        );
+
+        const initialPipelineEndTime = process.hrtime.bigint();
+        const initialPipelineDurationMs =
+          Number(initialPipelineEndTime - initialPipelineStartTime) / 1_000_000;
+        console.log(
+          `✅ Initial data pipeline run complete in ${initialPipelineDurationMs.toFixed(
+            2
+          )} ms.`
+        );
       } catch (error) {
-        console.error("Error during initial data pipeline on startup:", error);
+        console.error(
+          "❌ Error during initial data pipeline on startup:",
+          error
+        );
       }
     })();
 
-    cron.schedule("0 */2 * * *", async () => {
-      try {
-        await runAllScrapers();
-        await processArticlesForContentAndAI();
-      } catch (error) {
-        console.error("Error during scheduled data pipeline:", error);
-      }
-    });
+    // Schedule scrapers and AI processing to run every 2 hours
+    cron.schedule(
+      "0 */2 * * *",
+      async () => {
+        const scheduledPipelineStartTime = process.hrtime.bigint();
+        console.log(
+          `⏰ Starting scheduled data pipeline at ${new Date().toISOString()}...`
+        );
+        try {
+          const scraperStartTime = process.hrtime.bigint();
+          console.log("Running scheduled scrapers...");
+          await runAllScrapers();
+          const scraperEndTime = process.hrtime.bigint();
+          const scraperDurationMs =
+            Number(scraperEndTime - scraperStartTime) / 1_000_000;
+          console.log(
+            `Scheduled scraping and ingestion completed in ${scraperDurationMs.toFixed(
+              2
+            )} ms.`
+          );
 
-    cron.schedule("0 3 * * *", () => {
-      cleanupOldNews(3);
-    });
+          const articleProcessorStartTime = process.hrtime.bigint();
+          console.log("Processing articles for content and AI...");
+          await processArticlesForContentAndAI();
+          const articleProcessorEndTime = process.hrtime.bigint();
+          const articleProcessorDurationMs =
+            Number(articleProcessorEndTime - articleProcessorStartTime) /
+            1_000_000;
+          console.log(
+            `Scheduled article content and AI processing completed in ${articleProcessorDurationMs.toFixed(
+              2
+            )} ms.`
+          );
+
+          console.log("✅ Scheduled data pipeline run complete.");
+        } catch (error) {
+          console.error("❌ Error during scheduled data pipeline:", error);
+        } finally {
+          const scheduledPipelineEndTime = process.hrtime.bigint();
+          const scheduledPipelineDurationMs =
+            Number(scheduledPipelineEndTime - scheduledPipelineStartTime) /
+            1_000_000;
+          console.log(
+            `--- Scheduled data pipeline finished in ${scheduledPipelineDurationMs.toFixed(
+              2
+            )} ms ---`
+          );
+        }
+      },
+      {
+        timezone: "Asia/Kolkata",
+      }
+    );
+
+    // Schedule cleanup of old news daily at 3 AM
+    cron.schedule(
+      "0 3 * * *",
+      async () => {
+        const cleanupStartTime = process.hrtime.bigint();
+        console.log(
+          `🧹 Running scheduled cleanup of old news at ${new Date().toISOString()}...`
+        );
+        try {
+          await cleanupOldNews(20); // Keep news for 20 days
+          console.log("✅ Scheduled cleanup complete.");
+        } catch (error) {
+          console.error("❌ Error during scheduled cleanup:", error);
+        } finally {
+          const cleanupEndTime = process.hrtime.bigint();
+          const cleanupDurationMs =
+            Number(cleanupEndTime - cleanupStartTime) / 1_000_000;
+          console.log(
+            `--- Scheduled cleanup finished in ${cleanupDurationMs.toFixed(
+              2
+            )} ms ---`
+          );
+        }
+      },
+      {
+        timezone: "Asia/Kolkata",
+      }
+    );
   })
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
-app.use("/api/news", newsRoutes);
-app.use("/api/ai", aiRouter);
-app.use("/api/questions", questionsRouter);
+// Define public routes BEFORE applying authentication middleware
+app.get("/health", (req, res) => {
+  res.status(200).send("G-Press Backend is healthy and awake!");
+});
 
 app.get("/", (req, res) => {
   res.status(200).send("G-Press Backend is running!");
 });
+
+// IMPORTANT: Assuming you have an authentication-specific router for login/registration
+// that does NOT use the token verification middleware.
+// For example, if you have routes like /api/auth/login, /api/auth/register etc.
+// you would apply them here without the middleware.
+// For now, based on your frontend, the /api/news/sync-user route should be here or handled appropriately.
+// Your frontend makes a POST to `/api/news/sync-user` *with* the token immediately after Firebase login.
+// This means `sync-user` itself needs to be protected, or at least capable of handling the `firebaseUid`.
+// Let's assume for now `sync-user` is part of newsRouter and will be protected.
+// If your `sync-user` route *must* be accessible without token for the very first sync,
+// you'd need to define it *before* the `app.use` that applies `verifyFirebaseTokenAndGetUserId` to `newsRouter`.
+
+// Apply authentication middleware to all routes that require it
+app.use("/api/news", verifyFirebaseTokenAndGetUserId, newsRouter);
+app.use("/api/ai", verifyFirebaseTokenAndGetUserId, aiRouter);
+app.use("/api/questions", verifyFirebaseTokenAndGetUserId, questionsRouter);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {

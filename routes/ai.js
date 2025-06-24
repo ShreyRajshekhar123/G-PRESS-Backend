@@ -16,4 +16,4 @@ router.post('/process-text', (req, res) => {
 });
 */
 
-module.exports = { router };
+module.exports = router;

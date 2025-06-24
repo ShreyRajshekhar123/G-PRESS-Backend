@@ -1,110 +1,138 @@
-import sys
+import requests
+from bs4 import BeautifulSoup
 import json
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException, StaleElementReferenceException
-from datetime import datetime
+import re
 import logging
+import datetime
+import sys
 
-# Configure logging for consistent output
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+sys.stdout.reconfigure(encoding='utf-8')
+# Configure logging to write to stderr
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stderr)
 
 def get_hindu_articles():
-    # Reconfigure stdout for UTF-8 encoding
-    sys.stdout.reconfigure(encoding='utf-8')
-
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument('--disable-gpu') # Often helps in headless mode
-    options.add_argument('--start-maximized') # Maximizes window for consistent element visibility
-    options.add_argument('--window-size=1920,1080') # Explicit window size
-    options.add_argument("--log-level=3") # Suppress verbose ChromeDriver logs
-    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36') # Use a stable user agent
-    options.page_load_strategy = 'eager' # Set page load strategy
-
-    service = Service(ChromeDriverManager().install())
-    driver = None
+    """
+    Scrapes articles from The Hindu's National News section.
+    Extracts title, link, image URL, and publication time.
+    The description is derived from the link's slug.
+    """
+    base_url = "https://www.thehindu.com"
+    target_url = "https://www.thehindu.com/news/national/" # Targeting the National News page
     articles = []
 
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    }
+
+    logging.info(f"Navigating to {target_url} for The Hindu National News.")
     try:
-        driver = webdriver.Chrome(service=service, options=options)
-        driver.get("https://www.thehindu.com/latest-news/")
-        logging.info("Navigating to The Hindu latest news page.")
+        response = requests.get(target_url, headers=headers, timeout=15)
+        response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error fetching {target_url}: {e}")
+        return []
 
-        # Give the page a moment to load, using an implicit wait from the original
-        driver.implicitly_wait(5)
+    soup = BeautifulSoup(response.content, 'html.parser')
 
-        # Get the current system date and time once for all articles
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    article_blocks = soup.find_all("div", class_="element row-element")
 
-        try:
-            # Wait for some list items to be present before attempting to find all
-            WebDriverWait(driver, 15).until(
-                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ul.timeline-with-img > li"))
-            )
-            logging.info("Initial article list items found.")
-        except TimeoutException:
-            logging.error("Hindu Scraper: Timeout waiting for initial article list elements (ul.timeline-with-img > li). Page might not have loaded correctly or selectors are wrong.")
-            return [] # Return empty list if initial elements are not found
+    logging.info(f"Found {len(article_blocks)} potential article elements from National News page.")
 
-        items = driver.find_elements(By.CSS_SELECTOR, "ul.timeline-with-img > li")
-        logging.info(f"Found {len(items)} potential article list items.")
+    count = 0
+    for i, block in enumerate(article_blocks):
+        if count >= 25: # Cap at 25 articles
+            logging.info("Reached 25 valid articles for The Hindu National News. Stopping.")
+            break
 
-        for i, item in enumerate(items):
-            if len(articles) >= 25: # Limit to top 25 articles (consistent with TOI)
-                logging.info(f"Reached 25 articles for The Hindu. Stopping.")
-                break
-            try:
-                # Original logic extracts title from img alt/title, which often results in image descriptions.
-                # If you want actual headlines, you might need to find a text element within the 'item'.
-                # For now, keeping your original logic for consistency with previous successful runs.
-                anchor = item.find_element(By.CSS_SELECTOR, "div.element > a")
-                link = anchor.get_attribute("href")
+        title = ''
+        link = ''
+        description = '' # Will be populated from the link
+        image_url = ''
+        published_date = datetime.datetime.now(datetime.timezone.utc).isoformat() # Default to current UTC time if not found
 
-                # The problem noted in previous runs: title often from image alt/title
-                img = anchor.find_element(By.TAG_NAME, "img")
-                title = img.get_attribute("title") or img.get_attribute("alt")
+        # --- Extract Title and Link ---
+        title_h3 = block.find('h3', class_='title big')
 
-                if title and link and link.startswith('http'):
-                    articles.append({
-                        "title": title.strip(),
-                        "link": link,
-                        "summary": title.strip(), # Summary set to title for consistency
-                        "source": "hindu",
-                        "date": current_time
-                    })
-                    logging.info(f"Hindu Item {i+1}: Added article: '{title.strip()[:50]}...' Date: {current_time}")
-                else:
-                    logging.warning(f"Hindu Item {i+1}: Skipping invalid article (empty title/link or non-http link). Title: '{title}', Link: '{link}'")
+        if title_h3:
+            main_link_tag = title_h3.find('a', href=True)
+            if main_link_tag:
+                title = main_link_tag.get_text(strip=True)
+                link = main_link_tag['href']
 
-            except NoSuchElementException:
-                logging.warning(f"Hindu Item {i+1}: Could not find expected anchor or image within list item. Skipping.")
-                continue # Skip to the next item if elements are not found
-            except StaleElementReferenceException:
-                logging.warning(f"Hindu Item {i+1}: Stale element reference, re-trying or skipping.")
-                continue # Can occur if the DOM changes during iteration
+                if not link.startswith('http'):
+                    link = base_url + link
+            else:
+                logging.warning(f"Hindu National News Item {i+1}: No main link tag found inside h3.title. Skipping.")
+                continue
+        else:
+            logging.warning(f"Hindu National News Item {i+1}: No h3 with class 'title big' found. Skipping element.")
+            continue
 
-    except WebDriverException as e:
-        logging.error(f"Hindu Scraper: WebDriver error occurred: {e}")
-        articles = [] # Ensure articles is empty on critical error
-    except Exception as e:
-        logging.error(f"Hindu Scraper: An unexpected error occurred: {e}")
-        articles = []
-    finally:
-        if driver:
-            driver.quit()
-            logging.info("Hindu WebDriver closed.")
+        # --- Extract Image URL ---
+        picture_div = block.find('div', class_='picture')
+        if picture_div:
+            img_tag = picture_div.find('img', src=True)
+            if img_tag:
+                image_url = img_tag['src']
+                if not image_url or 'data:image' in image_url:
+                    image_url = img_tag.get('data-src', '').strip()
+                    if not image_url and img_tag.get('srcset'):
+                        srcset_parts = img_tag['srcset'].split(',')
+                        if srcset_parts:
+                            image_url = srcset_parts[0].strip().split(' ')[0]
+
+                if image_url and not image_url.startswith('http'):
+                    if image_url.startswith('//'):
+                        image_url = 'https:' + image_url
+                    elif image_url.startswith('/'):
+                        image_url = base_url + image_url
+
+        # --- Extract Publication Date/Time (Time Logs) ---
+        by_line_div = block.find('div', class_='by-line')
+        if by_line_div:
+            dateline_span = by_line_div.find('span', class_='dateline-timestamp')
+            if dateline_span:
+                time_tag = dateline_span.find('time', attrs={'datetime': True})
+                if time_tag:
+                    published_date = time_tag['datetime']
+
+        # --- Validate the extracted data ---
+        if not title or not link or not link.startswith('http') or \
+           re.match(r'^\d+$', title.strip()) or \
+           re.search(r'(page|next|previous)=', link.lower()):
+            logging.warning(f"Hindu National News Item {i+1}: Skipping invalid article (missing title/link, invalid link format, or generic title). Title: '{title}', Link: '{link}'")
+            continue
+
+        # --- NEW: Extract description from the link slug ---
+        # Example: https://www.thehindu.com/news/national/kanishka-bombing-1985-stresses-need-for-zero-tolerance-to-terrorism-eam-jaishankar/article69729197.ece
+        # We want: kanishka-bombing-1985-stresses-need-for-zero-tolerance-to-terrorism-eam-jaishankar
+        match = re.search(r'/(?P<slug>[^/]+)/article\d+\.ece$', link)
+        if match:
+            description = match.group('slug').replace('-', ' ').strip()
+        else:
+            # Fallback if the specific pattern isn't found, maybe use the title or a simpler part of the path
+            logging.warning(f"Hindu National News Item {i+1}: Could not extract slug from link: {link}. Falling back to title for description.")
+            description = title
+
+
+        articles.append({
+            'title': title,
+            'link': link,
+            'description': description, # Now populated from the link slug
+            'image_url': image_url,
+            'source': 'The Hindu',
+            'publishedAt': published_date
+        })
+        logging.info(f"Hindu National News Item {count+1}: Added article: '{title}' Link: {link} Published At: {published_date}")
+        count += 1
 
     return articles
 
-if __name__ == "__main__":
-    articles_data = get_hindu_articles()
-    # Print JSON for consumption by other parts of the application
-    print(json.dumps(articles_data, ensure_ascii=False, indent=2))
+if __name__ == '__main__':
+    logging.info("Starting Hindu scraper...")
+    scraped_articles = get_hindu_articles()
+    logging.info(f"Scraped {len(scraped_articles)} articles from The Hindu National News.")
+
+    # Print the scraped articles as JSON to standard output
+    json.dump(scraped_articles, sys.stdout, indent=4, ensure_ascii=False)
+    sys.stdout.flush()

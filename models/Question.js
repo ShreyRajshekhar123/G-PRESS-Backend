@@ -1,16 +1,20 @@
-// C:\Users\OKKKK\Desktop\G-Press 1\G-Press\Server\models\Question.js
-
+// models/Question.js
 const mongoose = require("mongoose");
 
 const questionSchema = new mongoose.Schema(
   {
     articleId: {
       type: mongoose.Schema.Types.ObjectId,
-      refPath: "articleSourceModel", // Dynamically refer to the model based on articleSourceModel
+      // No refPath here for articleId if you are doing a manual lookup/aggregation
+      // The `$lookup` in news.js uses the collection name "questions" and links by articleId.
+      // If you intend to use `populate` on this `articleId` field from *another* model,
+      // you would need `refPath` or a fixed `ref`. Given the setup, a fixed `ref` to 'Article'
+      // or similar is not possible since articles are in different collections.
+      // So, direct aggregation is preferred.
       required: true,
     },
-    // This field will store the actual model name (e.g., 'TheHindu', 'DNA')
-    // and is used by refPath to determine which collection to populate from.
+    // This field stores the Mongoose model name (e.g., 'TheHindu', 'DNA')
+    // This is useful for knowing which collection the articleId refers to if you need to fetch it later manually
     articleSourceModel: {
       type: String,
       required: true,
@@ -20,10 +24,11 @@ const questionSchema = new mongoose.Schema(
         "HindustanTimes",
         "IndianExpress",
         "TimesOfIndia",
+        // Add all other actual Mongoose model names here
       ],
     },
     articleSource: {
-      type: String, // e.g., 'hindu', 'dna'
+      type: String, // Stores the source key (e.g., 'hindu', 'dna')
       required: true,
       lowercase: true,
       trim: true,
@@ -39,8 +44,7 @@ const questionSchema = new mongoose.Schema(
     },
     options: {
       type: [String], // Array of strings for options
-      required: true, // Still require the array to exist, but not a specific length
-      // REMOVED: The 'validate' property that enforced array.length === 4
+      required: true,
     },
     correctAnswer: {
       type: String,
@@ -53,8 +57,8 @@ const questionSchema = new mongoose.Schema(
   }
 );
 
-// Add a compound unique index to prevent duplicate questions for the same article
-// and potentially the same question text (though AI generation should vary questions)
+// Add an index for efficient lookups by articleId.
+// A compound unique index (articleId, question) is good to prevent duplicate questions for the same article.
 questionSchema.index({ articleId: 1, question: 1 }, { unique: true });
 
 // Export the model, checking if it already exists to prevent OverwriteModelError

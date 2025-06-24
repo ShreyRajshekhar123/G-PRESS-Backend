@@ -1,123 +1,164 @@
-# C:\Users\OKKKK\Desktop\G-Press\G-Press\Server\scrapers\times_of_india_scraper.py
-
 import sys
 import json
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service # Import Service for ChromeDriverManager
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException, WebDriverException
-import time
-from datetime import datetime # Import datetime for timestamp
-import logging # Import logging for better output control
+import logging
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime
+import re
 
-# Configure logging for consistent output
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+sys.stdout.reconfigure(encoding='utf-8')
+# Configure logging for consistent output. Logs go to stderr by default.
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stderr)
 
 def get_times_of_india_articles():
-    # Reconfigure stdout for UTF-8 encoding
+    # Ensure stdout is UTF-8 encoded for proper JSON output
     sys.stdout.reconfigure(encoding='utf-8')
 
-    options = webdriver.ChromeOptions()
-    options.add_argument('--headless')
-    options.add_argument('--disable-blink-features=AutomationControlled')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu') # Often helps in headless mode
-    options.add_argument('--start-maximized') # Maximizes window for consistent element visibility
-    options.add_argument('--window-size=1920,1080') # Explicit window size
-    options.add_argument("--log-level=3") # Suppress verbose ChromeDriver logs
-    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36') # Use a stable user agent
-    options.page_load_strategy = 'eager'
+    base_url = "https://timesofindia.indiatimes.com"
+    url = f"{base_url}/news"
 
-    service = Service(ChromeDriverManager().install())
-    driver = None
-    headlines = []
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+    }
+
+    all_articles = []
+    processed_links = set() # To store links and avoid duplicates
 
     try:
-        driver = webdriver.Chrome(service=service, options=options) # Correctly use service and options
-        driver.get("https://timesofindia.indiatimes.com/news")
-        logging.info("Navigating to Times of India news page.")
+        logging.info(f"Fetching page content from {url} for Times of India...")
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
 
-        try:
-            # Wait for main article links to be present
-            # Based on previous successful run, 'a.VeCXM' appears to be a valid selector for *some* articles
-            WebDriverWait(driver, 20).until( # Increased wait time for robustness
-                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.VeCXM"))
-            )
-            logging.info("Initial article elements ('a.VeCXM') found for Times of India.")
-        except TimeoutException:
-            logging.error("TOI Scraper: Timeout waiting for initial elements ('a.VeCXM'). Page might not have loaded correctly or selectors are wrong.")
-            # Re-raise to fall into the main exception block, ensuring driver.quit()
-            raise
+        soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Scroll down to load more articles (common for TOI's dynamic loading)
-        last_height = driver.execute_script("return document.body.scrollHeight")
-        scroll_attempts = 0
-        max_scroll_attempts = 3 # Increased for more articles
+        # Combined selectors for main article links based on common TOI patterns
+        article_link_elements = soup.select("a.VeCXM, a.nA5sP, a[href*='.cms']")
 
-        while scroll_attempts < max_scroll_attempts:
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2) # Give time for content to load after scroll
-            new_height = driver.execute_script("return document.body.scrollHeight")
-            if new_height == last_height:
-                logging.info("No new content loaded after scroll. Stopping scrolling.")
-                break
-            last_height = new_height
-            scroll_attempts += 1
-        logging.info(f"Finished scrolling. Scrolled {scroll_attempts} times.")
+        logging.info(f"Found {len(article_link_elements)} potential article links.")
 
-        # Re-find all relevant article elements after scrolling
-        # This will include newly loaded content.
-        # Still using 'a.VeCXM' as it proved successful in the last output.
-        # If this proves unreliable again, more complex selectors or a broader search (e.g., a[href*=".cms"]) might be needed.
-        anchors = driver.find_elements(By.CSS_SELECTOR, "a.VeCXM")
-        logging.info(f"Found {len(anchors)} potential article links after scrolling.")
-
-        # Build headlines list
-        for i, a in enumerate(anchors[:25]): # Limit to top 25 articles
-            if len(headlines) >= 25:
+        for i, link_elem in enumerate(article_link_elements):
+            if len(all_articles) >= 25: # Limit to top 25 articles
                 logging.info(f"Reached 25 articles for TOI. Stopping.")
                 break
 
-            title = a.text.strip()
-            link = a.get_attribute("href")
-            
-            # --- Add current timestamp for date field ---
-            # Consistent with other scrapers, using YYYY-MM-DD HH:MM:SS format
-            current_scrape_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Initialize with None; these will be set from the link slug
+            title = None
+            href = None
+            description = None
+            imageUrl = None
 
-            if title and link and link.startswith('http'):
-                headlines.append({
+            # Use current scraping timestamp as the default 'publishedAt'
+            published_at = datetime.now().isoformat()
+
+            try:
+                raw_href = link_elem.get('href')
+
+                if raw_href:
+                    # Construct full URL if it's a relative path
+                    if raw_href.startswith('/'):
+                        href = base_url + raw_href
+                    elif raw_href.startswith('http://') or raw_href.startswith('https://'):
+                        href = raw_href
+                    else:
+                        logging.warning(f"TOI Item {i+1}: Link '{raw_href}' is neither absolute nor relative path. Skipping link.")
+                        continue
+                else:
+                    logging.warning(f"TOI Item {i+1}: Anchor tag found but href attribute is missing. Skipping link.")
+                    continue
+
+                # --- NEW LOGIC: Extract slug for Title and Description ---
+                # Example: https://timesofindia.indiatimes.com/india/kanishka-bombing-1985-stresses-need-for-zero-tolerance-to-terrorism-eam-jaishankar/articleshow/69729197.cms
+                # We want: kanishka-bombing-1985-stresses-need-for-zero-tolerance-to-terrorism-eam-jaishankar
+                # This regex targets the segment before '/articleshow/' and after the last '/'
+                slug_match = re.search(r'/(?P<slug>[^/]+)/articleshow/\d+\.cms$', href)
+                
+                if slug_match:
+                    extracted_slug = slug_match.group('slug').replace('-', ' ').strip()
+                    title = extracted_slug
+                    description = extracted_slug
+                else:
+                    # Fallback if the specific TOI slug pattern isn't found
+                    # Can extract the last part of the URL path before query parameters or #fragments
+                    path_parts = href.split('/')
+                    if path_parts[-1].endswith('.cms'):
+                        # Take the part before '.cms' and remove potential article ID
+                        fallback_slug = path_parts[-1].split('.cms')[0]
+                        fallback_slug = re.sub(r'^\d+', '', fallback_slug) # Remove leading numbers if present
+                        fallback_slug = fallback_slug.replace('-', ' ').strip()
+                        if fallback_slug:
+                             title = fallback_slug
+                             description = fallback_slug
+                        else:
+                            title = "No Title Extracted"
+                            description = "No Description Extracted"
+                    else:
+                        # As a last resort, just use the last meaningful part of the path
+                        title = path_parts[-2].replace('-', ' ').strip() if len(path_parts) > 1 else "No Title Extracted"
+                        description = title
+
+                    logging.warning(f"TOI Item {i+1}: Specific slug pattern not found for '{href}'. Falling back to simpler extraction: '{title}'")
+
+
+                # Filter out invalid or duplicate articles AFTER slug extraction
+                # - No title (meaning slug extraction failed completely) or link already processed
+                # - Titles that are too short (less than 5 chars for meaningfulness)
+                if not title or len(title) < 5 or href in processed_links:
+                    logging.debug(f"TOI Item {i+1}: Skipping invalid or duplicate article. Title: '{title}', Link: '{href}'")
+                    continue
+
+                # Image URL: Image elements are often siblings or within a specific container near the link.
+                parent_article_container = link_elem.find_parent(class_=['J_XyX', '_3eP_t', 'c_H85', 'w_Phg'])
+                if parent_article_container:
+                    img_elem = parent_article_container.select_one("img[src], img[data-src]")
+                    if img_elem:
+                        imageUrl = img_elem.get('data-src', img_elem.get('src', '')).strip()
+                        if imageUrl and not imageUrl.startswith('http'):
+                            if imageUrl.startswith('//'):
+                                imageUrl = 'https:' + imageUrl
+                            elif imageUrl.startswith('/'):
+                                imageUrl = base_url + imageUrl
+                        if imageUrl and ('.gif' in imageUrl or 'spacer.gif' in imageUrl or 'placeholder' in imageUrl):
+                            imageUrl = None
+
+                # Add to set of processed links to avoid duplicates
+                processed_links.add(href)
+
+                all_articles.append({
                     "title": title,
-                    "link": link,
-                    "date": current_scrape_time, # Added date field
-                    "summary": title, # Added summary field for consistency
-                    "source": "timesofindia"
+                    "link": href,
+                    "publishedAt": published_at,
+                    "description": description,
+                    "source": "timesofindia",
+                    "imageUrl": imageUrl,
+                    "content": None,
+                    "categories": [],
                 })
-                logging.info(f"TOI Item {i+1}: Added article: '{title[:50]}...' Date: {current_scrape_time}")
-            else:
-                logging.warning(f"TOI Item {i+1}: Skipping invalid article (empty title/link or non-http link). Title: '{title}', Link: '{link}'")
+                logging.info(f"TOI Item {i+1}: Added article: '{title[:50]}...' Link: {href}")
 
-    except TimeoutException as e:
-        logging.error(f"TOI Scraper: Timeout error: {e}. Check network connection or website structure.")
-        headlines = []
-    except WebDriverException as e:
-        logging.error(f"TOI Scraper: WebDriver error: {e}. Ensure Chromedriver is compatible with your Chrome browser.")
-        headlines = []
+            except Exception as e:
+                logging.error(f"TOI Item {i+1}: Error processing article: {e}. Skipping to next.")
+                continue
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Times of India Scraper: Network or HTTP error occurred: {e}")
+        all_articles = []
     except Exception as e:
-        logging.error(f"TOI Scraper failed unexpectedly: {e}")
-        headlines = []
-    finally:
-        if driver:
-            driver.quit()
-            logging.info("Times of India WebDriver closed.")
-            
-    return headlines # Return the list for external printing
+        logging.error(f"Times of India Scraper failed unexpectedly: {e}")
+        all_articles = []
+
+    return all_articles
 
 if __name__ == "__main__":
+    # Call the scraper function to get the data
     articles_data = get_times_of_india_articles()
-    # Print JSON for consumption by other parts of the application
-    print(json.dumps(articles_data, ensure_ascii=False, indent=2))
+
+    # Print the JSON data to stdout ONCE for Node.js to consume
+    json.dump(articles_data, sys.stdout, ensure_ascii=False, indent=2)
+    sys.stdout.flush()
+
+    # This final log message goes to stderr, not stdout, so it doesn't break JSON parsing.
+    logging.info("Times of India scraping process finished.")

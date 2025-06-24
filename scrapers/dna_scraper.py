@@ -1,115 +1,120 @@
 # C:\Users\OKKKK\Desktop\G-Press 1\G-Press\Server\scrapers\dna_scraper.py
 import json
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
-from datetime import datetime
 import sys
-import time
+from datetime import datetime
 import logging
-# import requests # REMOVED: No longer needed for direct HTTP POST
+import requests
+from bs4 import BeautifulSoup
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# --- REMOVED: NODE_BACKEND_INGESTION_URL is no longer needed ---
-# NODE_BACKEND_INGESTION_URL = 'http://localhost:5000/api/news/ingest-scraped-article'
-# ---------------------------------------------------------------
+sys.stdout.reconfigure(encoding='utf-8')
+# Configure logging to write to stderr so it doesn't interfere with JSON output to stdout
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stderr)
 
 def get_dna_articles():
+    # It's good practice to ensure stdout encoding is utf-8, especially for direct output
     sys.stdout.reconfigure(encoding='utf-8')
 
-    options = Options()
-    options.add_argument('--headless')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument("--log-level=3")
-    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36')
-    options.page_load_strategy = 'eager'
+    base_url = "https://www.dnaindia.com"
+    url = f"{base_url}/latest-news"
 
-    service = Service(ChromeDriverManager().install())
-    driver = None
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+    }
 
-    # --- NEW: Initialize an empty list to store all scraped articles ---
     all_articles = []
-    # ------------------------------------------------------------------
 
     try:
-        driver = webdriver.Chrome(service=service, options=options)
-        driver.get("https://www.dnaindia.com/latest-news")
+        logging.info(f"Fetching page content from {url} for DNA India...")
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
 
-        logging.info("Waiting for initial page content to load for DNA India...")
-        time.sleep(5)
+        soup = BeautifulSoup(response.text, 'html.parser')
 
-        for i in range(25): # Loop through articles
+        articles_containers = soup.select("div.list-news")
+
+        logging.info(f"Found {len(articles_containers)} potential article containers.")
+
+        for i, article_container_elem in enumerate(articles_containers[:25]):
+            title = None
+            href = None
+            imageUrl = None # Initialize imageUrl
+
+            # Per user's request, always use system's current date and time for publishedAt
+            published_at = datetime.now().isoformat()
+
             try:
-                articles_containers = driver.find_elements(By.CSS_SELECTOR, "div.explainer-subtext")
+                # --- Extract Link and Title from 'explainer-subtext' ---
+                explainer_subtext_elem = article_container_elem.find("div", class_="explainer-subtext")
+                if explainer_subtext_elem:
+                    link_elem = explainer_subtext_elem.find("a")
+                    if link_elem:
+                        title = link_elem.get_text(strip=True)
+                        raw_href = link_elem.get('href')
 
-                if i >= len(articles_containers):
-                    logging.info(f"Fewer than 25 articles found. Breaking loop at article {i}.")
-                    break
-
-                article_elem = articles_containers[i]
-
-                link_elem = None
-                title = None
-                href = None
-                
-                try:
-                    link_elem = article_elem.find_element(By.TAG_NAME, "a")
-                    title = link_elem.text.strip()
-                    href = link_elem.get_attribute("href")
-                except NoSuchElementException:
-                    logging.warning(f"DNA Item {i}: Could not find 'a' tag or title/href. Skipping.")
+                        if raw_href:
+                            if raw_href.startswith('/'):
+                                href = base_url + raw_href
+                            elif raw_href.startswith('http://') or raw_href.startswith('https://'):
+                                href = raw_href
+                            else:
+                                logging.warning(f"DNA Item {i}: Link '{raw_href}' is neither absolute nor relative path. Skipping link.")
+                                continue
+                        else:
+                            logging.warning(f"DNA Item {i}: 'a' tag found but href attribute is missing. Skipping link.")
+                            continue
+                else:
+                    logging.warning(f"DNA Item {i}: Could not find 'explainer-subtext' div. Skipping.")
                     continue
 
-                # Use current timestamp as publishedAt if not found on listing page
-                published_at = datetime.now().isoformat()
-                logging.info(f"DNA Item {i}: Actual article date not found on listing page. Using current timestamp.")
+                # --- Attempt to Extract Image URL from 'lazy-img' ---
+                # (Note: This will likely still be None due to dynamic loading, as discussed)
+                img_div = article_container_elem.find("div", class_="lazy-img")
+                if img_div:
+                    actual_img_tag = img_div.find("img")
+                    if actual_img_tag and actual_img_tag.get('src'):
+                        imageUrl = actual_img_tag.get('src')
+                    elif actual_img_tag and actual_img_tag.get('data-src'): # Check data-src as a fallback
+                        imageUrl = actual_img_tag.get('data-src')
 
-                if title and href and len(title) > 5 and href.startswith('http'):
-                    article_data = {
-                        "title": title,
-                        "link": href,
-                        "publishedAt": published_at,
-                        "description": title, # Using title as description if no summary available
-                        "source": "dna",
-                        "imageUrl": None, # DNA scraper doesn't get image directly here
-                        "content": None, # Full content will be scraped by Node.js later, if needed
-                        "categories": [], # Initialize categories as an empty list. Populate this if DNA provides categories!
-                    }
-
-                    # --- MODIFIED: Append article to list instead of sending HTTP POST ---
-                    all_articles.append(article_data)
-                    # logging.info(f"DNA Item {i}: Added to list for later output.") # Optional: for debugging Python script directly
-                    # ------------------------------------------------------------------
-                else:
-                    logging.warning(f"DNA Item {i}: Skipping due to missing title/link or invalid format. Title: '{title}', Link: '{href}'")
-
-            except StaleElementReferenceException:
-                logging.warning(f"DNA Item {i}: Stale element encountered. Skipping this item.")
-                continue
-            except NoSuchElementException as e:
-                logging.warning(f"DNA Item {i}: Element not found: {e}. Skipping this item.")
-                continue
             except Exception as e:
-                logging.error(f"DNA Item {i}: An unexpected error occurred: {e}")
+                logging.warning(f"DNA Item {i}: An error occurred during element extraction. Skipping. Error: {e}")
                 continue
 
+            # Final validation check before adding the article
+            if title and href and len(title) > 5 and (href.startswith('http://') or href.startswith('https://')):
+                article_data = {
+                    "title": title,
+                    "link": href,
+                    "publishedAt": published_at, # Always system's current date/time
+                    "description": title,
+                    "source": "dna",
+                    "imageUrl": imageUrl, # Will likely be None
+                    "content": None,
+                    "categories": [],
+                }
+                all_articles.append(article_data)
+            else:
+                logging.warning(f"DNA Item {i}: Skipping due to final validation failure (e.g., missing title/link or invalid absolute URL). Title: '{title}', Link: '{href}'")
+
+    except requests.exceptions.HTTPError as e:
+        logging.error(f"HTTP error occurred while fetching DNA India: {e} - Status Code: {e.response.status_code}")
+    except requests.exceptions.ConnectionError as e:
+        logging.error(f"Connection error occurred while fetching DNA India: {e}. Check internet connection or URL.")
+    except requests.exceptions.Timeout as e:
+        logging.error(f"Timeout error occurred while fetching DNA India: {e}. Server took too long to respond.")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"An unexpected requests error occurred while fetching DNA India: {e}")
     except Exception as e:
-        logging.error(f"DNA Scraper failed: {e}")
+        logging.error(f"An unexpected error occurred during DNA scraping: {e}")
     finally:
-        if driver:
-            driver.quit()
-            logging.info("DNA WebDriver closed.")
-        
-        # --- NEW: Print the entire list of articles as JSON to stdout ---
-        # This is what your Node.js backend expects to parse
-        json.dump(all_articles, sys.stdout)
-        # -----------------------------------------------------------------
+        # This is the key change: dump the entire list of articles as JSON to stdout
+        json.dump(all_articles, sys.stdout, indent=4, ensure_ascii=False)
+        logging.info("DNA scraping process finished.")
 
 if __name__ == "__main__":
     get_dna_articles()

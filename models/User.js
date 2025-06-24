@@ -1,26 +1,28 @@
-// C:\Users\OKKKK\Desktop\G-Press\G-Press\Server\models\User.js
-
+// models/User.js
 const mongoose = require("mongoose");
+// Import the SCHEMA_ENUM_CATEGORIES for consistency from articleProcessor
+const { SCHEMA_ENUM_CATEGORIES } = require("../services/articleProcessor");
 
 // Define the schema for a single bookmark entry
 const bookmarkSchema = new mongoose.Schema({
   articleId: {
-    // This stores the ObjectId of the specific article from its source collection
     type: mongoose.Schema.Types.ObjectId,
     required: true,
-    refPath: "bookmarks.articleSourceModel", // Dynamic reference to the correct news model
+    // refPath is used for population, but for bookmarks we embed details
+    // It's still good to indicate the source model for clarity and potential future population.
+    refPath: "bookmarks.articleSourceModel",
   },
   articleSourceModel: {
     // This stores the Mongoose model name (e.g., 'TheHindu', 'DNA')
+    // IMPORTANT: Ensure this enum matches your actual Mongoose model names from sourceConfig
     type: String,
     required: true,
     enum: [
-      // IMPORTANT: Ensure this enum matches your actual Mongoose model names
-      "TheHindu",
-      "DNA",
-      "HindustanTimes",
-      "IndianExpress",
-      "TimesOfIndia",
+      "TheHindu", // Corresponds to models/TheHindu.js
+      "DNA", // Corresponds to models/DNA.js
+      "HindustanTimes", // Corresponds to models/HindustanTimes.js
+      "IndianExpress", // Corresponds to models/IndianExpress.js
+      "TimesOfIndia", // Corresponds to models/TimesOfIndia.js
       // Add any other news source model names here if you expand
     ],
   },
@@ -29,18 +31,21 @@ const bookmarkSchema = new mongoose.Schema({
     default: Date.now,
   },
   // Embed essential article details directly within the bookmark
-  // This avoids needing separate lookups when fetching user bookmarks
+  // This avoids needing separate lookups when fetching user bookmarks,
+  // and provides a snapshot of the article at the time of bookmarking.
   articleDetails: {
+    _id: { type: mongoose.Schema.Types.ObjectId, required: true }, // Store original _id
     title: { type: String, required: true },
     link: { type: String, required: true },
     imageUrl: String,
     description: String,
-    // Use 'publishedAt' as per your frontend needs, maps to 'pubDate' in scraper models
-    publishedAt: Date,
-    categories: [String],
-    // Store the 'configKey' version (e.g., 'hindu', 'dna') for the frontend to use
-    // e.g., for routing or displaying source icon
-    source: { type: String, required: true },
+    publishedAt: Date, // Use 'publishedAt' as per frontend needs, maps to 'pubDate' in scraper models
+    categories: {
+      type: [String],
+      enum: SCHEMA_ENUM_CATEGORIES,
+      default: ["General"],
+    }, // Use the imported enum
+    source: { type: String, required: true }, // Stores the display-friendly string, e.g., "The Hindu"
   },
 });
 
@@ -60,22 +65,20 @@ const userSchema = new mongoose.Schema({
   },
   bookmarks: [bookmarkSchema], // Array of bookmark subdocuments
   preferences: {
-    categories: [String],
-    sources: [String],
+    categories: { type: [String], enum: SCHEMA_ENUM_CATEGORIES }, // User preferences for categories
+    sources: [String], // User preferences for sources (e.g., 'hindu', 'toi')
   },
   createdAt: {
     type: Date,
     default: Date.now,
   },
-  updatedAt: { // Added for tracking updates to user doc (e.g., preferences, displayName)
+  updatedAt: {
     type: Date,
     default: Date.now,
   },
 });
 
-// Compound index to prevent duplicate bookmarks for the same user and article from the same source
-// The `unique: true` property means that the combination of firebaseUid, bookmarks.articleId,
-// and bookmarks.articleSourceModel must be unique across all documents.
+// Compound unique index to prevent duplicate bookmarks for the same user and article from the same source
 userSchema.index(
   {
     firebaseUid: 1,
@@ -84,12 +87,13 @@ userSchema.index(
   },
   {
     unique: true,
-    // The `partialFilterExpression` is a more robust way to handle unique indexes
-    // on array elements, ensuring it only applies when all fields are present.
-    // However, for this specific use case, it's typically fine without it
-    // if all bookmarks always have these fields. The simpler `unique: true`
-    // on the compound index should handle it effectively for `addToSet` operations.
+    // partialFilterExpression ensures the index only applies to documents where these fields exist in bookmarks.
+    // This is good for sparse arrays or if you sometimes add empty bookmark objects.
+    partialFilterExpression: {
+      "bookmarks.articleId": { $exists: true },
+      "bookmarks.articleSourceModel": { $exists: true },
+    },
   }
 );
 
-module.exports = mongoose.model("User", userSchema);
+module.exports = mongoose.models.User || mongoose.model("User", userSchema);

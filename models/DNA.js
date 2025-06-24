@@ -1,4 +1,3 @@
-// Server/models/DNA.js
 const mongoose = require("mongoose");
 
 const dnaSchema = new mongoose.Schema(
@@ -17,6 +16,7 @@ const dnaSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    pubDate: { type: Date, required: true },
     lastScrapedContentAt: { type: Date, default: null },
     contentScrapeFailed: { type: Boolean, default: false },
     source: {
@@ -33,16 +33,19 @@ const dnaSchema = new mongoose.Schema(
     currentAffairsCategory: {
       type: String,
       enum: [
-        "Politics",
+        // UPDATED: Now matches the 'categories' enum below
+        "Polity & Governance",
         "Economy",
-        "International Relations",
+        "Environment & Ecology",
         "Science & Technology",
-        "Environment",
-        "Sports",
-        "Awards & Honors",
-        "Defence",
-        "Judiciary",
+        "International Relations",
+        "Art & Culture",
+        "History",
         "Social Issues",
+        "Defence & Security",
+        "Awards, Persons & Places in News",
+        "National",
+        "Sports",
         "Miscellaneous",
         "General",
       ],

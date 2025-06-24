@@ -1,5 +1,3 @@
-// Server/models/TimesOfIndia.js (Assuming this is a separate file)
-// Note: This model should be in its own file, e.g., TimesOfIndia.js
 const mongoose = require("mongoose");
 const timesOfIndiaSchema = new mongoose.Schema(
   {
@@ -9,7 +7,7 @@ const timesOfIndiaSchema = new mongoose.Schema(
     imageUrl: { type: String, default: null },
     content: { type: String, default: null },
     questions: [{ type: mongoose.Schema.Types.ObjectId, ref: "Question" }],
-
+    pubDate: { type: Date, required: true },
     lastGeneratedQuestionsAt: {
       type: Date,
     },
@@ -33,16 +31,19 @@ const timesOfIndiaSchema = new mongoose.Schema(
     currentAffairsCategory: {
       type: String,
       enum: [
-        "Politics",
+        // UPDATED: Now matches the 'categories' enum below
+        "Polity & Governance",
         "Economy",
-        "International Relations",
+        "Environment & Ecology",
         "Science & Technology",
-        "Environment",
-        "Sports",
-        "Awards & Honors",
-        "Defence",
-        "Judiciary",
+        "International Relations",
+        "Art & Culture",
+        "History",
         "Social Issues",
+        "Defence & Security",
+        "Awards, Persons & Places in News",
+        "National",
+        "Sports",
         "Miscellaneous",
         "General",
       ],

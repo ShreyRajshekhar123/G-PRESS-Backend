@@ -1,8 +1,6 @@
-// Server/models/TheHindu.js (Assuming this is a separate file)
-// Note: This model should be in its own file, e.g., TheHindu.js
-const mongoose = require("mongoose"); // THIS LINE IS CRUCIAL AND MUST BE PRESENT
+const mongoose = require("mongoose");
 
-const theHinduSchema = new mongoose.Schema( // Changed to theHinduSchema for clarity
+const theHinduSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
     link: { type: String, unique: true, required: true },
@@ -16,7 +14,7 @@ const theHinduSchema = new mongoose.Schema( // Changed to theHinduSchema for cla
     imageUrl: { type: String, default: null },
     content: { type: String, default: null }, // Stores full article content
     questions: [{ type: mongoose.Schema.Types.ObjectId, ref: "Question" }],
-
+    pubDate: { type: Date, required: true },
     lastGeneratedQuestionsAt: {
       type: Date,
     },
@@ -34,16 +32,19 @@ const theHinduSchema = new mongoose.Schema( // Changed to theHinduSchema for cla
     currentAffairsCategory: {
       type: String,
       enum: [
-        "Politics",
+        // UPDATED: Now matches the 'categories' enum below
+        "Polity & Governance",
         "Economy",
-        "International Relations",
+        "Environment & Ecology",
         "Science & Technology",
-        "Environment",
-        "Sports",
-        "Awards & Honors",
-        "Defence",
-        "Judiciary",
+        "International Relations",
+        "Art & Culture",
+        "History",
         "Social Issues",
+        "Defence & Security",
+        "Awards, Persons & Places in News",
+        "National",
+        "Sports",
         "Miscellaneous",
         "General",
       ],
@@ -78,4 +79,4 @@ const theHinduSchema = new mongoose.Schema( // Changed to theHinduSchema for cla
   { timestamps: true }
 );
 
-module.exports = mongoose.model("TheHindu", theHinduSchema, "hindus"); // Changed model name to "TheHindu" and uses theHinduSchema
+module.exports = mongoose.model("TheHindu", theHinduSchema, "hindus");

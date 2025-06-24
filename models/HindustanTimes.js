@@ -1,5 +1,3 @@
-// Server/models/HindustanTimes.js (Assuming this is a separate file)
-// Note: This model should be in its own file, e.g., HindustanTimes.js
 const mongoose = require("mongoose");
 const hindustanTimesSchema = new mongoose.Schema(
   {
@@ -30,19 +28,23 @@ const hindustanTimesSchema = new mongoose.Schema(
       default: false,
       index: true,
     },
+    pubDate: { type: Date, required: true },
     currentAffairsCategory: {
       type: String,
       enum: [
-        "Politics",
+        // UPDATED: Now matches the 'categories' enum below
+        "Polity & Governance",
         "Economy",
-        "International Relations",
+        "Environment & Ecology",
         "Science & Technology",
-        "Environment",
-        "Sports",
-        "Awards & Honors",
-        "Defence",
-        "Judiciary",
+        "International Relations",
+        "Art & Culture",
+        "History",
         "Social Issues",
+        "Defence & Security",
+        "Awards, Persons & Places in News",
+        "National",
+        "Sports",
         "Miscellaneous",
         "General",
       ],

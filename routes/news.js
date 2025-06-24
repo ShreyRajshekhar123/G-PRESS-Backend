@@ -1,7 +1,5 @@
 const express = require("express");
 const router = express.Router();
-const { spawn } = require("child_process");
-const path = require("path");
 const mongoose = require("mongoose");
 
 const {
@@ -9,573 +7,32 @@ const {
 } = require("../middleware/authMiddleware");
 const { sourceConfig } = require("../config/sources");
 const User = require("../models/User");
-const Question =
-  mongoose.models.Question ||
-  mongoose.model(
-    "Question",
-    new mongoose.Schema({
-      articleId: mongoose.Schema.Types.ObjectId,
-      articleSource: String,
-      question: String,
-      options: [String],
-      correctAnswer: String,
-    })
-  );
+const Question = require("../models/Question"); // Correctly import the compiled Question model
+const {
+  assignCategoriesToArticle, // Import categorization logic
+  SCHEMA_ENUM_CATEGORIES, // Import enum for categories
+} = require("../services/articleProcessor"); // Adjust path if needed
 
-const getModelByName = (modelName) => {
-  try {
-    return mongoose.model(modelName);
-  } catch (error) {
-    console.error(`Error: Model '${modelName}' not registered.`, error.message);
-    return null;
-  }
-};
-
+// Helper to format source names for display
 const formatSourceForDisplay = (configKey) => {
-  switch (configKey) {
-    case "hindu":
-      return "The Hindu";
-    case "dna":
-      return "DNA India";
-    case "hindustan-times":
-      return "Hindustan Times";
-    case "ie":
-      return "Indian Express";
-    case "toi":
-      return "Times of India";
-    case "ndtv":
-      return "NDTV";
-    default:
-      return configKey
-        .split("-")
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(" ");
+  const configEntry = sourceConfig[configKey];
+  if (configEntry && configEntry.sourceName) {
+    return configEntry.sourceName;
   }
+  return configKey
+    .split("-")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 };
 
-const categoryKeywords = {
-  "Polity & Governance": [
-    "modi",
-    "government",
-    "election",
-    "parliament",
-    "congress",
-    "bjp",
-    "party",
-    "minister",
-    "cabinet",
-    "policy",
-    "political",
-    "judiciary",
-    "justice",
-    "supreme court",
-    "governance",
-    "rajnath",
-    "gandhi",
-    "karnataka",
-    "bihar",
-  ],
-  Economy: [
-    "economy",
-    "market",
-    "finance",
-    "sbi",
-    "company",
-    "investment",
-    "shares",
-    "stock",
-    "rupee",
-    "bank",
-    "ipo",
-    "profit",
-    "sales",
-    "revenue",
-    "bill gates",
-    "amazon",
-    "genpact",
-    "hdfc",
-    "icici",
-    "jpmorgan chase",
-    "fiscal",
-    "tax",
-  ],
-  "Environment & Ecology": [
-    "climate",
-    "pollution",
-    "environment",
-    "global warming",
-    "conservation",
-    "water",
-    "river",
-    "ecology",
-  ],
-  "Science & Technology": [
-    "ai",
-    "tech",
-    "software",
-    "startup",
-    "app",
-    "google",
-    "apple",
-    "microsoft",
-    "elon musk",
-    "tesla",
-    "spacex",
-    "chip",
-    "semiconductor",
-    "nasa",
-    "nuclear",
-    "research",
-    "discovery",
-    "astronomy",
-    "physics",
-    "biology",
-    "science",
-  ],
-  "International Relations": [
-    "iran",
-    "israel",
-    "us",
-    "russia",
-    "china",
-    "pakistan",
-    "ukraine",
-    "conflict",
-    "international",
-    "treaty",
-    "global",
-    "europe",
-    "canada",
-    "hong kong",
-    "middle east",
-    "diplomat",
-    "un",
-  ],
-  "Art & Culture": [
-    "artist",
-    "portrait",
-    "culture",
-    "music",
-    "bollywood",
-    "hollywood",
-    "film",
-    "movie",
-    "actor",
-    "actress",
-    "cinema",
-    "celebrity",
-    "series",
-    "ott",
-    "aamir khan",
-    "hrithik roshan",
-    "ranveer singh",
-    "amitabh bachchan",
-    "sonakshi sinha",
-    "neena gupta",
-    "kuvempu",
-    "sushma thota",
-    "thota vaikuntam",
-    "world music day",
-  ],
-  History: ["history", "kanishka bombing"],
-  "Social Issues": [
-    "women",
-    "gender",
-    "social security",
-    "human rights",
-    "pension",
-    "toilet clinic",
-    "neurodivergence",
-    "parkinson's",
-    "public health",
-    "issues",
-    "migrant",
-    "evacuation",
-  ],
-  "Defence & Security": [
-    "defence",
-    "security",
-    "military",
-    "army",
-    "police",
-    "dgca",
-    "air india",
-    "terror",
-    "bombing",
-    "quds force",
-    "idf",
-  ],
-  "Awards, Persons & Places in News": [
-    "awards",
-    "persons",
-    "places",
-    "in news",
-    "kuvempu",
-    "sushma thota",
-    "thota vaikuntam",
-    "pawan kalyan",
-    "h.d. kumaraswamy",
-    "n. chandrababu naidu",
-    "narendra modi",
-    "r.n. ravi",
-    "nitish kumar",
-    "shahrukh khan",
-    "randeep hooda",
-    "jeff bezos",
-    "lauren sanchez",
-    "vance boelter",
-    "sunjay kapur",
-    "sanam saeed",
-    "mohib mirza",
-    "dorothy shea",
-    "jamie dimon",
-    "priyank kharge",
-    "neeraj chopra",
-    "parag parikh",
-    "shabir shah",
-    "shreya ghoshal",
-    "dr. bhanu mishra",
-    "amitabh bachchan",
-    "yashasvi jaiswal",
-    "rishabh pant",
-    "shubman gill",
-    "sunil gavaskar",
-    "stuart broad",
-    "ben stokes",
-    "michael vaughan",
-    "rahul gandhi",
-    "donald trump",
-    "asim munir",
-    "shehbaz sharif",
-    "maharaja of jaipur sawai padmanabh singh",
-  ],
-  National: [
-    "india",
-    "indian",
-    "delhi",
-    "mumbai",
-    "bengaluru",
-    "karnataka",
-    "jammu",
-    "madurai",
-    "kochi",
-    "bihar",
-    "hyderabad",
-    "ahmedabad",
-    "visakhapatnam",
-    "lok sabha",
-    "state",
-  ],
-  Sports: [
-    "cricket",
-    "football",
-    "match",
-    "team",
-    "player",
-    "score",
-    "tennis",
-    "olympics",
-    "world cup",
-    "ipl",
-    "test",
-    "century",
-    "shubman gill",
-    "rishabh pant",
-    "yashasvi jaiswal",
-    "ben stokes",
-    "super rugby",
-  ],
-  Miscellaneous: [
-    "miscellaneous",
-    "qr codes",
-    "sugar mill",
-    "monetary policy",
-    "startup",
-    "ecommerce",
-    "train services",
-    "footpath",
-  ],
-};
-
-const SCHEMA_ENUM_CATEGORIES = [
-  "Polity & Governance",
-  "Economy",
-  "Environment & Ecology",
-  "Science & Technology",
-  "International Relations",
-  "Art & Culture",
-  "History",
-  "Social Issues",
-  "Defence & Security",
-  "Awards, Persons & Places in News",
-  "National",
-  "Sports",
-  "Miscellaneous",
-  "General",
-];
-
-function assignCategoriesToArticle(title, description) {
-  const text = (title + " " + (description || "")).toLowerCase();
-  const assigned = new Set();
-
-  for (const category in categoryKeywords) {
-    const keywords = categoryKeywords[category];
-    for (const keyword of keywords) {
-      if (text.includes(keyword)) {
-        assigned.add(category);
-      }
-    }
-  }
-
-  let filteredCategories = Array.from(assigned).filter((cat) =>
-    SCHEMA_ENUM_CATEGORIES.includes(cat)
-  );
-
-  if (filteredCategories.length === 0) {
-    return ["General"];
-  }
-
-  return filteredCategories;
-}
-
-async function runScraperAndStore(sourceKey, scraperPath, Model) {
-  return new Promise((resolve, reject) => {
-    const pythonProcess = spawn("python", [scraperPath]);
-    let dataBuffer = "";
-    let errorBuffer = "";
-
-    pythonProcess.stdout.on("data", (data) => {
-      dataBuffer += data.toString();
-    });
-
-    pythonProcess.stderr.on("data", (data) => {
-      errorBuffer += data.toString();
-    });
-
-    pythonProcess.on("close", async (code) => {
-      if (code !== 0) {
-        return reject(
-          new Error(`Python script exited with code ${code}: ${errorBuffer}`)
-        );
-      }
-
-      try {
-        const articles = JSON.parse(dataBuffer);
-
-        let newArticlesCount = 0;
-        let updatedArticlesCount = 0;
-        let skippedArticlesCount = 0;
-
-        const genericTitlesToSkip = [
-          "representational image only. file",
-          "representatve image",
-          "photo used for representation purpose only.",
-          "file",
-          "photo",
-          "image",
-          "a view of",
-          "image released by",
-          "representational image only",
-          "file photo",
-          "image might show:",
-          "stream key mixer",
-          "photo :",
-          "representational photo of",
-          "photo used for representation purpose only",
-        ];
-
-        for (const articleData of articles) {
-          const { title, link, description, imageUrl } = articleData;
-
-          const dateString = articleData.publishedAt || articleData.date;
-
-          if (!title || !link || !dateString) {
-            skippedArticlesCount++;
-            continue;
-          }
-
-          const lowerCaseTitle = title.toLowerCase().trim();
-          const isGenericTitle = genericTitlesToSkip.some((pattern) =>
-            lowerCaseTitle.includes(pattern)
-          );
-
-          if (isGenericTitle) {
-            skippedArticlesCount++;
-            continue;
-          }
-
-          let parsedDate;
-          const tempDate = new Date(dateString);
-          if (!isNaN(tempDate.getTime())) {
-            parsedDate = tempDate;
-          } else {
-            parsedDate = new Date();
-          }
-
-          const assignedCategories = assignCategoriesToArticle(
-            title,
-            description
-          );
-
-          const cleanLink = link.split("?")[0];
-          const existingArticle = await Model.findOne({ link: cleanLink });
-
-          if (existingArticle) {
-            let hasChanged = false;
-
-            let verifiedExistingPubDate = null;
-            if (existingArticle.pubDate) {
-              try {
-                const temp = new Date(existingArticle.pubDate);
-                if (!isNaN(temp.getTime())) {
-                  verifiedExistingPubDate = temp;
-                }
-              } catch (e) {
-                console.warn(
-                  `[${sourceKey} Scraper] Error verifying existingArticle.pubDate for article "${existingArticle.title}":`,
-                  existingArticle.pubDate,
-                  e.message
-                );
-              }
-            }
-
-            let verifiedNewPubDate = null;
-            if (parsedDate) {
-              try {
-                const temp = new Date(parsedDate);
-                if (!isNaN(temp.getTime())) {
-                  verifiedNewPubDate = temp;
-                }
-              } catch (e) {
-                console.warn(
-                  `[${sourceKey} Scraper] Error verifying parsedDate for article "${title}":`,
-                  parsedDate,
-                  e.message
-                );
-              }
-            }
-
-            const existingPubDateStr = verifiedExistingPubDate
-              ? verifiedExistingPubDate.toISOString().split("T")[0]
-              : null;
-            const newPubDateStr = verifiedNewPubDate
-              ? verifiedNewPubDate.toISOString().split("T")[0]
-              : null;
-
-            if (existingArticle.title !== title) {
-              existingArticle.title = title;
-              hasChanged = true;
-            }
-            if (!existingArticle.description && description) {
-              existingArticle.description = description;
-              hasChanged = true;
-            }
-            if (!existingArticle.imageUrl && imageUrl) {
-              existingArticle.imageUrl = imageUrl;
-              hasChanged = true;
-            }
-            if (existingPubDateStr !== newPubDateStr) {
-              existingArticle.pubDate = parsedDate;
-              hasChanged = true;
-            }
-            if (
-              JSON.stringify(existingArticle.categories) !==
-              JSON.stringify(assignedCategories)
-            ) {
-              existingArticle.categories = assignedCategories;
-              hasChanged = true;
-            }
-
-            if (hasChanged) {
-              existingArticle.updatedAt = new Date();
-              await existingArticle.save();
-              updatedArticlesCount++;
-            } else {
-              skippedArticlesCount++;
-            }
-          } else {
-            const newArticle = new Model({
-              title,
-              link: cleanLink,
-              pubDate: parsedDate,
-              source: sourceKey,
-              description: description || null,
-              imageUrl: imageUrl || null,
-              categories: assignedCategories,
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            });
-            await newArticle.save();
-            newArticlesCount++;
-          }
-        }
-        resolve({
-          newArticlesCount,
-          updatedArticlesCount,
-          skippedArticlesCount,
-        });
-      } catch (parseError) {
-        console.error(
-          `[${sourceKey} Scraper] Error parsing JSON from Python script for ${sourceKey}:`,
-          parseError
-        );
-        reject(parseError);
-      }
-    });
-  });
-}
-
-async function runAllScrapers() {
-  for (const sourceKey in sourceConfig) {
-    const config = sourceConfig[sourceKey];
-    try {
-      await runScraperAndStore(sourceKey, config.scraperPath, config.model);
-    } catch (error) {
-      console.error(
-        `[${sourceKey} Scraper] Failed to run scraper for ${sourceKey}:`,
-        error.message
-      );
-    }
-  }
-}
-
-async function cleanupOldNews(daysToKeep) {
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
-  cutoffDate.setHours(0, 0, 0, 0);
-
-  let totalDeleted = 0;
-  for (const sourceKey in sourceConfig) {
-    const config = sourceConfig[sourceKey];
-    try {
-      const articlesToDelete = await config.model
-        .find({ pubDate: { $lt: cutoffDate } }, "_id")
-        .lean();
-      const articleIdsToDelete = articlesToDelete.map((a) => a._id);
-
-      if (articleIdsToDelete.length > 0) {
-        const questionDeleteResult = await Question.deleteMany({
-          articleId: { $in: articleIdsToDelete },
-        });
-      }
-
-      const articleDeleteResult = await config.model.deleteMany({
-        pubDate: { $lt: cutoffDate },
-      });
-      totalDeleted += articleDeleteResult.deletedCount;
-    } catch (error) {
-      console.error(`[Cleanup] Error cleaning up ${sourceKey}:`, error.message);
-    }
-  }
-}
-
-const getNewsAggregationPipeline = (page, limit) => {
+// Moved getNewsAggregationPipeline from the old news.js
+const getNewsAggregationPipeline = (page, limit, isCurrentAffair = false) => {
   const skip = (page - 1) * limit;
 
-  return [
+  let pipeline = [
     {
       $lookup: {
-        from: "questions",
+        from: "questions", // This refers to the collection name for Questions
         localField: "_id",
         foreignField: "articleId",
         as: "populatedQuestions",
@@ -588,8 +45,8 @@ const getNewsAggregationPipeline = (page, limit) => {
     },
     {
       $sort: {
-        hasQuestions: -1,
-        pubDate: -1,
+        hasQuestions: -1, // Articles with questions first
+        pubDate: -1, // Then by newest publication date
       },
     },
     {
@@ -600,12 +57,25 @@ const getNewsAggregationPipeline = (page, limit) => {
     },
     {
       $project: {
-        populatedQuestions: 0,
+        populatedQuestions: 0, // Exclude the populated questions array from the final output
       },
     },
   ];
+
+  if (isCurrentAffair) {
+    pipeline.unshift({
+      $match: {
+        isCurrentAffair: true,
+      },
+    });
+  }
+
+  return pipeline;
 };
 
+// --- API ROUTES ---
+
+// Sync User data (Firebase UID, email, displayName)
 router.post("/sync-user", verifyFirebaseTokenAndGetUserId, async (req, res) => {
   try {
     const firebaseUid = req.firebaseUid;
@@ -652,6 +122,7 @@ router.post("/sync-user", verifyFirebaseTokenAndGetUserId, async (req, res) => {
   }
 });
 
+// Get User Bookmarks
 router.get("/bookmarks", verifyFirebaseTokenAndGetUserId, async (req, res) => {
   try {
     const firebaseUid = req.firebaseUid;
@@ -666,12 +137,18 @@ router.get("/bookmarks", verifyFirebaseTokenAndGetUserId, async (req, res) => {
     const populatedBookmarks = [];
 
     for (const bookmark of bookmarks) {
+      // Basic validation for essential bookmark fields
       if (!bookmark.articleId || !bookmark.articleSourceModel) {
+        console.warn(
+          `Skipping invalid bookmark entry for user ${firebaseUid}:`,
+          bookmark
+        );
         continue;
       }
 
       const sourceModelName = bookmark.articleSourceModel;
 
+      // Validate articleSourceModel against the User model's enum to prevent arbitrary model names
       const userBookmarkSchemaPath = User.schema.path("bookmarks");
       const articleSourceModelSchemaType =
         userBookmarkSchemaPath.caster.schema.path("articleSourceModel");
@@ -680,14 +157,21 @@ router.get("/bookmarks", verifyFirebaseTokenAndGetUserId, async (req, res) => {
         : [];
 
       if (!enumValues.includes(sourceModelName)) {
+        console.warn(
+          `Bookmark for user ${firebaseUid} contains invalid articleSourceModel: '${sourceModelName}'. Skipping.`
+        );
         continue;
       }
 
+      // Find the corresponding config entry to get the Mongoose model
       const sourceConfigEntry = Object.values(sourceConfig).find(
         (config) => config.modelName === sourceModelName
       );
 
       if (!sourceConfigEntry || !sourceConfigEntry.model) {
+        console.warn(
+          `No valid sourceConfig entry or model found for sourceModelName: ${sourceModelName}. Skipping bookmark.`
+        );
         continue;
       }
 
@@ -701,17 +185,23 @@ router.get("/bookmarks", verifyFirebaseTokenAndGetUserId, async (req, res) => {
           articleSourceModel: bookmark.articleSourceModel,
           bookmarkedAt: bookmark.bookmarkedAt,
           articleDetails: {
+            // Note: articleDetails from the bookmark schema already has these,
+            // but fetching the latest from the article ensures data consistency.
             _id: article._id,
             title: article.title,
             link: article.link,
             imageUrl: article.imageUrl || null,
             description: article.description || null,
-            publishedAt: article.pubDate || article.publishedAt,
+            publishedAt: article.pubDate || article.publishedAt, // Use pubDate first
             categories: article.categories || [],
-            source: formatSourceForDisplay(article.source),
+            source: formatSourceForDisplay(article.source), // Use the helper for display
           },
         });
       } else {
+        // Log if an article linked in a bookmark no longer exists in its collection
+        console.warn(
+          `Article with ID ${bookmark.articleId} from ${bookmark.articleSourceModel} not found for user ${firebaseUid}'s bookmark. It might have been deleted.`
+        );
       }
     }
 
@@ -722,6 +212,7 @@ router.get("/bookmarks", verifyFirebaseTokenAndGetUserId, async (req, res) => {
   }
 });
 
+// Add Bookmark
 router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
   try {
     const firebaseUid = req.firebaseUid;
@@ -736,6 +227,7 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
       return res.status(400).json({ message: "Invalid article ID format." });
     }
 
+    // Validate articleSourceModel against the User model's enum
     const userSchema = User.schema;
     const bookmarkSchemaPath = userSchema.path("bookmarks");
     const articleSourceModelSchemaType =
@@ -763,9 +255,9 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
       });
     }
 
+    // Check for existing bookmark before attempting to add
     const isAlreadyBookmarkedInMemory = user.bookmarks.some(
       (bookmark) =>
-        bookmark.articleId &&
         String(bookmark.articleId) === String(articleId) &&
         bookmark.articleSourceModel === articleSourceModel
     );
@@ -774,6 +266,7 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
       return res.status(409).json({ message: "Article already bookmarked." });
     }
 
+    // Find the corresponding config entry to get the Mongoose model
     const sourceConfigEntry = Object.values(sourceConfig).find(
       (config) => config.modelName === articleSourceModel
     );
@@ -786,7 +279,7 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
     }
 
     const ArticleModel = sourceConfigEntry.model;
-    const article = await ArticleModel.findById(articleId).lean();
+    const article = await ArticleModel.findById(articleId).lean(); // Fetch the actual article to embed its details
 
     if (!article) {
       return res.status(404).json({
@@ -796,7 +289,7 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
     }
 
     const newBookmark = {
-      articleId: new mongoose.Types.ObjectId(articleId),
+      articleId: new mongoose.Types.ObjectId(articleId), // Ensure it's an ObjectId
       articleSourceModel: articleSourceModel,
       bookmarkedAt: new Date(),
       articleDetails: {
@@ -805,14 +298,14 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
         link: article.link,
         imageUrl: article.imageUrl || null,
         description: article.description || null,
-        publishedAt: article.pubDate,
+        publishedAt: article.pubDate, // Use pubDate from the scraped article
         categories: article.categories,
-        source: formatSourceForDisplay(article.source),
+        source: formatSourceForDisplay(article.source), // Use the helper for display
       },
     };
 
     user.bookmarks.push(newBookmark);
-    await user.save();
+    await user.save(); // Mongoose will automatically handle the unique index validation here
 
     res.status(201).json({
       message: "Article bookmarked successfully!",
@@ -821,6 +314,7 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
   } catch (error) {
     console.error(`Error adding bookmark for user ${req.firebaseUid}:`, error);
     if (error.code === 11000) {
+      // Duplicate key error from the Mongoose unique index
       return res.status(409).json({ message: "Article already bookmarked." });
     }
     res
@@ -829,6 +323,7 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
   }
 });
 
+// Delete Bookmark
 router.delete(
   "/bookmark/:bookmarkId",
   verifyFirebaseTokenAndGetUserId,
@@ -849,19 +344,21 @@ router.delete(
         return res.status(404).json({ message: "User record not found." });
       }
 
-      const initialBookmarkCount = user.bookmarks.length;
-
-      user.bookmarks = user.bookmarks.filter(
-        (b) => String(b._id) !== String(bookmarkId)
+      // Find the index of the bookmark to remove
+      const bookmarkIndex = user.bookmarks.findIndex(
+        (b) => String(b._id) === String(bookmarkId)
       );
 
-      if (user.bookmarks.length === initialBookmarkCount) {
+      if (bookmarkIndex === -1) {
         return res
           .status(404)
           .json({ message: "Bookmark not found for this user." });
       }
 
+      // Remove the bookmark from the array
+      user.bookmarks.splice(bookmarkIndex, 1);
       await user.save();
+
       res.status(200).json({ message: "Bookmark removed successfully!" });
     } catch (error) {
       console.error(
@@ -873,6 +370,7 @@ router.delete(
   }
 );
 
+// Get Current Affairs News (AI-categorized as isCurrentAffair: true)
 router.get("/current-affairs", async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 50;
@@ -880,30 +378,35 @@ router.get("/current-affairs", async (req, res) => {
   try {
     let allArticles = [];
 
+    // Iterate through all configured sources
     for (const sourceKey in sourceConfig) {
       const config = sourceConfig[sourceKey];
       if (config.model) {
+        // Apply the pipeline with isCurrentAffair: true filter
         const sourceArticles = await config.model.aggregate(
-          getNewsAggregationPipeline(1, limit * 2),
-          { maxTimeMS: 30000 } // Apply maxTimeMS as an option
+          getNewsAggregationPipeline(1, limit * 2, true), // Fetch more to allow sorting and pagination
+          { maxTimeMS: 30000 }
         );
         allArticles.push(...sourceArticles);
       }
     }
 
+    // Sort globally across all sources
     allArticles.sort((a, b) => {
+      // Articles with questions should appear first, then by date
       if (a.hasQuestions && !b.hasQuestions) return -1;
       if (!a.hasQuestions && b.hasQuestions) return 1;
-      return new Date(b.pubDate) - new Date(a.pubDate);
+      return new Date(b.pubDate) - new Date(a.pubDate); // Sort by newest first
     });
 
+    // Apply global pagination
     const skipGlobal = (page - 1) * limit;
     const finalArticles = allArticles.slice(skipGlobal, skipGlobal + limit);
 
     res.status(200).json({
       news: finalArticles,
       currentPage: page,
-      totalPages: Math.ceil(allArticles.length / limit),
+      totalPages: Math.ceil(allArticles.length / limit), // Calculate total pages based on all fetched articles
       totalResults: allArticles.length,
     });
   } catch (error) {
@@ -912,6 +415,7 @@ router.get("/current-affairs", async (req, res) => {
   }
 });
 
+// Get All News
 router.get("/all", async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 50;
@@ -919,30 +423,35 @@ router.get("/all", async (req, res) => {
   try {
     let allArticles = [];
 
+    // Iterate through all configured sources
     for (const sourceKey in sourceConfig) {
       const config = sourceConfig[sourceKey];
       if (config.model) {
+        // Fetch more articles initially to allow global sorting and pagination
         const sourceArticles = await config.model.aggregate(
-          getNewsAggregationPipeline(1, limit * 2),
-          { maxTimeMS: 30000 } // Apply maxTimeMS as an option
+          getNewsAggregationPipeline(1, limit * 2), // Fetch twice the limit to ensure enough for global sort
+          { maxTimeMS: 30000 }
         );
         allArticles.push(...sourceArticles);
       }
     }
 
+    // Sort globally across all sources
     allArticles.sort((a, b) => {
+      // Articles with questions should appear first, then by date
       if (a.hasQuestions && !b.hasQuestions) return -1;
       if (!a.hasQuestions && b.hasQuestions) return 1;
-      return new Date(b.pubDate) - new Date(a.pubDate);
+      return new Date(b.pubDate) - new Date(a.pubDate); // Sort by newest first
     });
 
+    // Apply global pagination
     const skipGlobal = (page - 1) * limit;
     const finalArticles = allArticles.slice(skipGlobal, skipGlobal + limit);
 
     res.status(200).json({
       news: finalArticles,
       currentPage: page,
-      totalPages: Math.ceil(allArticles.length / limit),
+      totalPages: Math.ceil(allArticles.length / limit), // Calculate total pages based on all fetched articles
       totalResults: allArticles.length,
     });
   } catch (error) {
@@ -951,6 +460,7 @@ router.get("/all", async (req, res) => {
   }
 });
 
+// Get News by Source
 router.get("/:sourceKey", async (req, res) => {
   const sourceKey = req.params.sourceKey;
   const page = parseInt(req.query.page) || 1;
@@ -968,8 +478,11 @@ router.get("/:sourceKey", async (req, res) => {
     );
 
     if (!news || news.length === 0) {
+      // It's better to return an empty array with success if no news found,
+      // rather than a 404 or an error, unless it's truly an unexpected issue.
       return res.status(200).json({
-        message: `Failed to fetch news from ${sourceKey}. No articles found or an issue occurred.`,
+        news: [],
+        message: `No articles found for ${formatSourceForDisplay(sourceKey)}.`,
       });
     }
 
@@ -990,17 +503,24 @@ router.get("/:sourceKey", async (req, res) => {
   }
 });
 
+// Search News
 router.get("/search", async (req, res) => {
   const query = req.query.q;
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 50;
 
   if (!query || query.trim() === "") {
-    return res.status(200).json([]);
+    return res.status(200).json({
+      news: [],
+      currentPage: page,
+      totalPages: 0,
+      totalResults: 0,
+    });
   }
 
   try {
     let searchResults = [];
+    // Using $regex for partial match, 'i' for case-insensitivity
     const regex = new RegExp(query, "i");
 
     for (const sourceKey in sourceConfig) {
@@ -1008,11 +528,14 @@ router.get("/search", async (req, res) => {
       if (Model) {
         const sourceSearchResults = await Model.find({
           $or: [{ title: regex }, { description: regex }],
-        }).lean();
+        })
+          .sort({ pubDate: -1 }) // Sort each source's results by date
+          .lean();
         searchResults.push(...sourceSearchResults);
       }
     }
 
+    // Sort globally across all sources by publication date
     searchResults.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
 
     const startIndex = (page - 1) * limit;
@@ -1031,8 +554,4 @@ router.get("/search", async (req, res) => {
   }
 });
 
-module.exports = {
-  router,
-  runAllScrapers,
-  cleanupOldNews,
-};
+module.exports = router; // Export only the router

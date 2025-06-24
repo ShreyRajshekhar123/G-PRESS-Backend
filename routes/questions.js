@@ -23,11 +23,9 @@ router.get(
 
     const sourceConfigEntry = sourceConfig[sourceKey];
     if (!sourceConfigEntry || !sourceConfigEntry.model) {
-      return res
-        .status(400)
-        .json({
-          message: "Invalid news source key provided for question generation.",
-        });
+      return res.status(400).json({
+        message: "Invalid news source key provided for question generation.",
+      });
     }
 
     const ArticleModel = sourceConfigEntry.model; // e.g., TheHindu, DNA
@@ -200,4 +198,4 @@ router.get("/get-by-article/:sourceKey/:articleId", async (req, res) => {
   }
 });
 
-module.exports = { router }; // Export only the router
+module.exports = router; // Export only the router
