@@ -1,0 +1,5 @@
+requests
+beautifulsoup4 # If your scrapers use BeautifulSoup (bs4)
+# selenium       # If your scrapers use Selenium
+lxml           # Often used with BeautifulSoup for parsing
+# Add any other Python libraries your scrapers import
