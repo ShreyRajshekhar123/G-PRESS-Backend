@@ -9,8 +9,8 @@ const { sourceConfig } = require("../config/sources");
 const User = require("../models/User");
 const Question = require("../models/Question"); // Correctly import the compiled Question model
 const {
-  assignCategoriesToArticle, // Import categorization logic
-  SCHEMA_ENUM_CATEGORIES, // Import enum for categories
+  assignCategoriesToArticle, // Import categorization logic (not directly used here but good to keep)
+  SCHEMA_ENUM_CATEGORIES, // Import enum for categories (not directly used here but good to keep)
 } = require("../services/articleProcessor"); // Adjust path if needed
 
 // Helper to format source names for display
@@ -81,27 +81,72 @@ router.post("/sync-user", verifyFirebaseTokenAndGetUserId, async (req, res) => {
     const firebaseUid = req.firebaseUid;
     const { displayName, email } = req.body;
 
-    let user = await User.findOne({ firebaseUid });
+    if (!firebaseUid) {
+      return res
+        .status(401)
+        .json({ message: "Firebase UID not provided by middleware." });
+    }
+
+    let user = await User.findOne({ firebaseUid: firebaseUid });
 
     if (!user) {
-      user = new User({
-        firebaseUid,
-        email,
-        displayName,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-      await user.save();
-      return res
-        .status(201)
-        .json({ message: "User synced and created.", user: user.toObject() });
+      // If no user found by firebaseUid, try to find by email
+      user = await User.findOne({ email: email });
+
+      if (user) {
+        // User found by email, but with a different (or missing) firebaseUid.
+        // This means the same person is logging in with a different method.
+        // Update their firebaseUid and displayName if provided.
+        let updated = false;
+        if (user.firebaseUid !== firebaseUid) {
+          user.firebaseUid = firebaseUid;
+          updated = true;
+        }
+        if (displayName && user.displayName !== displayName) {
+          user.displayName = displayName;
+          updated = true;
+        }
+        if (updated) {
+          user.updatedAt = new Date();
+          await user.save();
+        }
+        return res.status(200).json({
+          message: "User synced (Firebase UID updated).",
+          user: user.toObject(),
+        });
+      } else {
+        // No user found by firebaseUid or email, so create a new one.
+        user = new User({
+          firebaseUid,
+          email,
+          displayName,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+        await user.save();
+        return res.status(201).json({
+          message: "New user created and synced.",
+          user: user.toObject(),
+        });
+      }
     } else {
+      // User found by firebaseUid, now update displayName/email if different
       let updated = false;
       if (displayName && user.displayName !== displayName) {
         user.displayName = displayName;
         updated = true;
       }
       if (email && user.email !== email) {
+        // Before updating email, ensure the new email isn't already used by another user
+        const existingUserWithEmail = await User.findOne({
+          email: email,
+          firebaseUid: { $ne: firebaseUid },
+        });
+        if (existingUserWithEmail) {
+          return res.status(409).json({
+            message: "Email is already associated with another account.",
+          });
+        }
         user.email = email;
         updated = true;
       }
@@ -117,8 +162,16 @@ router.post("/sync-user", verifyFirebaseTokenAndGetUserId, async (req, res) => {
     console.error(
       `[User Sync] Error syncing user ${req.firebaseUid || "N/A"}:`,
       error
-    );
-    res.status(500).json({ message: "Failed to sync user data." });
+    ); // Specifically check for duplicate key error from the Mongoose unique index
+    if (error.code === 11000) {
+      return res.status(409).json({
+        message:
+          "A user with this email or Firebase UID already exists in the system.",
+      });
+    }
+    res.status(500).json({
+      message: "Failed to sync user data due to an internal server error.",
+    });
   }
 });
 
@@ -146,9 +199,8 @@ router.get("/bookmarks", verifyFirebaseTokenAndGetUserId, async (req, res) => {
         continue;
       }
 
-      const sourceModelName = bookmark.articleSourceModel;
+      const sourceModelName = bookmark.articleSourceModel; // Validate articleSourceModel against the User model's enum to prevent arbitrary model names
 
-      // Validate articleSourceModel against the User model's enum to prevent arbitrary model names
       const userBookmarkSchemaPath = User.schema.path("bookmarks");
       const articleSourceModelSchemaType =
         userBookmarkSchemaPath.caster.schema.path("articleSourceModel");
@@ -161,9 +213,8 @@ router.get("/bookmarks", verifyFirebaseTokenAndGetUserId, async (req, res) => {
           `Bookmark for user ${firebaseUid} contains invalid articleSourceModel: '${sourceModelName}'. Skipping.`
         );
         continue;
-      }
+      } // Find the corresponding config entry to get the Mongoose model
 
-      // Find the corresponding config entry to get the Mongoose model
       const sourceConfigEntry = Object.values(sourceConfig).find(
         (config) => config.modelName === sourceModelName
       );
@@ -225,9 +276,8 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
     }
     if (!mongoose.Types.ObjectId.isValid(articleId)) {
       return res.status(400).json({ message: "Invalid article ID format." });
-    }
+    } // Validate articleSourceModel against the User model's enum
 
-    // Validate articleSourceModel against the User model's enum
     const userSchema = User.schema;
     const bookmarkSchemaPath = userSchema.path("bookmarks");
     const articleSourceModelSchemaType =
@@ -253,9 +303,8 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
       return res.status(404).json({
         message: "User record not found. Please ensure user data is synced.",
       });
-    }
+    } // Check for existing bookmark before attempting to add
 
-    // Check for existing bookmark before attempting to add
     const isAlreadyBookmarkedInMemory = user.bookmarks.some(
       (bookmark) =>
         String(bookmark.articleId) === String(articleId) &&
@@ -264,9 +313,8 @@ router.post("/bookmark", verifyFirebaseTokenAndGetUserId, async (req, res) => {
 
     if (isAlreadyBookmarkedInMemory) {
       return res.status(409).json({ message: "Article already bookmarked." });
-    }
+    } // Find the corresponding config entry to get the Mongoose model
 
-    // Find the corresponding config entry to get the Mongoose model
     const sourceConfigEntry = Object.values(sourceConfig).find(
       (config) => config.modelName === articleSourceModel
     );
@@ -342,9 +390,8 @@ router.delete(
 
       if (!user) {
         return res.status(404).json({ message: "User record not found." });
-      }
+      } // Find the index of the bookmark to remove
 
-      // Find the index of the bookmark to remove
       const bookmarkIndex = user.bookmarks.findIndex(
         (b) => String(b._id) === String(bookmarkId)
       );
@@ -353,9 +400,8 @@ router.delete(
         return res
           .status(404)
           .json({ message: "Bookmark not found for this user." });
-      }
+      } // Remove the bookmark from the array
 
-      // Remove the bookmark from the array
       user.bookmarks.splice(bookmarkIndex, 1);
       await user.save();
 
@@ -376,9 +422,8 @@ router.get("/current-affairs", async (req, res) => {
   const limit = parseInt(req.query.limit) || 50;
 
   try {
-    let allArticles = [];
+    let allArticles = []; // Iterate through all configured sources
 
-    // Iterate through all configured sources
     for (const sourceKey in sourceConfig) {
       const config = sourceConfig[sourceKey];
       if (config.model) {
@@ -389,17 +434,15 @@ router.get("/current-affairs", async (req, res) => {
         );
         allArticles.push(...sourceArticles);
       }
-    }
+    } // Sort globally across all sources
 
-    // Sort globally across all sources
     allArticles.sort((a, b) => {
       // Articles with questions should appear first, then by date
       if (a.hasQuestions && !b.hasQuestions) return -1;
       if (!a.hasQuestions && b.hasQuestions) return 1;
       return new Date(b.pubDate) - new Date(a.pubDate); // Sort by newest first
-    });
+    }); // Apply global pagination
 
-    // Apply global pagination
     const skipGlobal = (page - 1) * limit;
     const finalArticles = allArticles.slice(skipGlobal, skipGlobal + limit);
 
@@ -421,9 +464,8 @@ router.get("/all", async (req, res) => {
   const limit = parseInt(req.query.limit) || 50;
 
   try {
-    let allArticles = [];
+    let allArticles = []; // Iterate through all configured sources
 
-    // Iterate through all configured sources
     for (const sourceKey in sourceConfig) {
       const config = sourceConfig[sourceKey];
       if (config.model) {
@@ -434,17 +476,15 @@ router.get("/all", async (req, res) => {
         );
         allArticles.push(...sourceArticles);
       }
-    }
+    } // Sort globally across all sources
 
-    // Sort globally across all sources
     allArticles.sort((a, b) => {
       // Articles with questions should appear first, then by date
       if (a.hasQuestions && !b.hasQuestions) return -1;
       if (!a.hasQuestions && b.hasQuestions) return 1;
       return new Date(b.pubDate) - new Date(a.pubDate); // Sort by newest first
-    });
+    }); // Apply global pagination
 
-    // Apply global pagination
     const skipGlobal = (page - 1) * limit;
     const finalArticles = allArticles.slice(skipGlobal, skipGlobal + limit);
 
@@ -476,8 +516,7 @@ router.get("/search", async (req, res) => {
   }
 
   try {
-    let searchResults = [];
-    // Using $regex for partial match, 'i' for case-insensitivity
+    let searchResults = []; // Using $regex for partial match, 'i' for case-insensitivity
     const regex = new RegExp(query, "i");
 
     for (const sourceKey in sourceConfig) {
@@ -490,9 +529,8 @@ router.get("/search", async (req, res) => {
           .lean();
         searchResults.push(...sourceSearchResults);
       }
-    }
+    } // Sort globally across all sources by publication date
 
-    // Sort globally across all sources by publication date
     searchResults.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
 
     const startIndex = (page - 1) * limit;
