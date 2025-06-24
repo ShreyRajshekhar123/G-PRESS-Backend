@@ -310,11 +310,8 @@ app.listen(PORT, () => {
   console.log(`✅ Server started on port ${PORT}`);
 
   // Determine the base URL for the internal heartbeat
-  // For Render, process.env.RENDER_EXTERNAL_URL will provide the public URL.
-  // For local development, it will be localhost:PORT.
-  const BASE_URL =
-    process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
-  const HEARTBEAT_TARGET_URL = `${BASE_URL}/internal-heartbeat`;
+  // Corrected approach: Always use localhost for internal pings
+  const HEARTBEAT_TARGET_URL = `http://localhost:${PORT}/internal-heartbeat`;
 
   // Function to send the internal heartbeat
   async function sendInternalHeartbeat() {
@@ -327,12 +324,23 @@ app.listen(PORT, () => {
       console.error(
         `Error during self-ping to internal-heartbeat: ${error.message}`
       );
+      // Log the full error for debugging, especially network errors
+      if (error.response) {
+        console.error("Error Response Data:", error.response.data);
+        console.error("Error Response Status:", error.response.status);
+        console.error("Error Response Headers:", error.response.headers);
+      } else if (error.request) {
+        console.error("Error Request:", error.request);
+      } else {
+        console.error("Error Message:", error.message);
+      }
     }
   }
 
   // Function to schedule the next randomized heartbeat
   function scheduleNextRandomHeartbeat() {
-    const interval = getRandomInterval(4, 13); // Random interval between 4 and 13 minutes
+    // MODIFIED LINE: Changed the getRandomInterval range to 1 to 4 minutes
+    const interval = getRandomInterval(1, 4); // Randomized interval between 1 and 4 minutes
     console.log(
       `Scheduling next randomized internal heartbeat in ${
         interval / 1000 / 60
