@@ -8,6 +8,7 @@ const cors = require("cors");
 const cron = require("node-cron");
 const admin = require("firebase-admin");
 const path = require("path");
+const axios = require("axios"); // NEW: Import axios for sending internal heartbeat requests
 
 // Import your custom Firebase authentication middleware
 const {
@@ -82,7 +83,11 @@ try {
   }
 } catch (error) {
   console.error("❌ Failed to initialize Firebase Admin SDK:", error.message);
-  process.exit(1);
+  // Do not exit process in production for Firebase errors unless critical.
+  // In local development, exiting might be acceptable.
+  if (process.env.NODE_ENV !== "production") {
+    process.exit(1);
+  }
 }
 
 // Middleware
@@ -266,6 +271,12 @@ app.get("/health", (req, res) => {
   res.status(200).send("G-Press Backend is healthy and awake!");
 });
 
+// NEW: Add a simple endpoint for internal randomized heartbeat monitoring
+app.get("/internal-heartbeat", (req, res) => {
+  console.log("Internal heartbeat endpoint hit at:", new Date().toISOString());
+  res.status(200).send("OK");
+});
+
 app.get("/", (req, res) => {
   res.status(200).send("G-Press Backend is running!");
 });
@@ -286,7 +297,55 @@ app.use("/api/news", verifyFirebaseTokenAndGetUserId, newsRouter);
 app.use("/api/ai", verifyFirebaseTokenAndGetUserId, aiRouter);
 app.use("/api/questions", verifyFirebaseTokenAndGetUserId, questionsRouter);
 
+// NEW: Randomized Heartbeat Logic
+// This logic will run continuously as part of your main application.
+function getRandomInterval(minMinutes, maxMinutes) {
+  const minMs = minMinutes * 60 * 1000;
+  const maxMs = maxMinutes * 60 * 1000;
+  return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+}
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`✅ Server started on port ${PORT}`);
+
+  // Determine the base URL for the internal heartbeat
+  // For Render, process.env.RENDER_EXTERNAL_URL will provide the public URL.
+  // For local development, it will be localhost:PORT.
+  const BASE_URL =
+    process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+  const HEARTBEAT_TARGET_URL = `${BASE_URL}/internal-heartbeat`;
+
+  // Function to send the internal heartbeat
+  async function sendInternalHeartbeat() {
+    try {
+      const response = await axios.get(HEARTBEAT_TARGET_URL);
+      console.log(
+        `Self-ping to internal-heartbeat successful. Status: ${response.status}`
+      );
+    } catch (error) {
+      console.error(
+        `Error during self-ping to internal-heartbeat: ${error.message}`
+      );
+    }
+  }
+
+  // Function to schedule the next randomized heartbeat
+  function scheduleNextRandomHeartbeat() {
+    const interval = getRandomInterval(4, 13); // Random interval between 4 and 13 minutes
+    console.log(
+      `Scheduling next randomized internal heartbeat in ${
+        interval / 1000 / 60
+      } minutes.`
+    );
+    setTimeout(() => {
+      sendInternalHeartbeat();
+      scheduleNextRandomHeartbeat(); // Schedule the next one after this one runs
+    }, interval);
+  }
+
+  // Start the randomized heartbeat scheduler after the server starts
+  console.log("🚀 Starting randomized internal heartbeat scheduler...");
+  sendInternalHeartbeat(); // Send an initial heartbeat immediately
+  scheduleNextRandomHeartbeat();
 });
